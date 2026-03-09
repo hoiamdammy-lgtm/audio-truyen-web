@@ -24,6 +24,12 @@ const FALLBACK_COVER =
 const INTRO_SKIP_SECONDS = 85
 const SEEK_STEP = 10
 
+// --- Thêm type VideoServer ---
+type VideoServer = {
+  name: string
+  url: string
+}
+
 type Episode = {
   id: string
   movie_id: string
@@ -33,6 +39,7 @@ type Episode = {
   hls_url?: string | null
   mp4_url?: string | null
   backup_url?: string | null
+  servers?: VideoServer[] | null // Cột JSONB mới
   created_at?: string | null
 }
 
@@ -80,9 +87,12 @@ type PlayerPrefs = {
 
 type SourceType = 'telegram' | 'iframe' | 'hls' | 'mp4'
 
+// Cập nhật lại SourceOption để hỗ trợ dữ liệu server mới
 type SourceOption = {
+  id: string // Dùng id để phân biệt thay vì chỉ dùng type (vì có thể có 2 iframe)
   key: SourceType
   label: string
+  url: string
   available: boolean
 }
 
@@ -137,43 +147,58 @@ function isTelegramUrl(url?: string | null) {
   return !!parseTelegramPost(url)
 }
 
-function detectSourceType(episode?: Episode | null): SourceType {
-  if (!episode) return 'iframe'
-  if (episode.hls_url) return 'hls'
-  if (episode.mp4_url) return 'mp4'
-  if (isTelegramUrl(episode.video_url || episode.backup_url)) return 'telegram'
-  return 'iframe'
-}
-
-function getPlayableUrl(episode?: Episode | null, sourceType?: SourceType) {
-  if (!episode) return ''
-  if (sourceType === 'hls') return episode.hls_url || ''
-  if (sourceType === 'mp4') return episode.mp4_url || ''
-  if (sourceType === 'telegram') {
-    const tg = parseTelegramPost(episode.video_url || episode.backup_url)
-    return tg?.normalizedUrl || ''
-  }
-  return episode.video_url || episode.backup_url || ''
-}
-
+// --- Logic mới để tạo mảng SourceOptions từ cột `servers` ---
 function getSourceOptions(episode?: Episode | null): SourceOption[] {
   if (!episode) return []
-  return [
-    { key: 'hls', label: 'VIP HLS', available: !!episode.hls_url },
-    { key: 'mp4', label: 'MP4', available: !!episode.mp4_url },
-    {
-      key: 'telegram',
-      label: 'Telegram',
-      available: !!parseTelegramPost(episode.video_url || episode.backup_url),
-    },
-    {
-      key: 'iframe',
-      label: 'Dự phòng',
-      available:
-        !!(episode.video_url || episode.backup_url) &&
-        !parseTelegramPost(episode.video_url || episode.backup_url),
-    },
-  ]
+  
+  const options: SourceOption[] = []
+
+  // 1. Ưu tiên đọc từ cột JSON `servers` mới
+  if (episode.servers && Array.isArray(episode.servers) && episode.servers.length > 0) {
+      episode.servers.forEach((server, index) => {
+          if (!server.url) return;
+          
+          const isTg = isTelegramUrl(server.url)
+          const isHls = server.url.includes('.m3u8')
+          const isMp4 = server.url.endsWith('.mp4')
+
+          let type: SourceType = 'iframe'
+          if (isTg) type = 'telegram'
+          else if (isHls) type = 'hls'
+          else if (isMp4) type = 'mp4'
+
+          options.push({
+              id: `server-${index}`,
+              key: type,
+              label: server.name || `Server ${index + 1}`,
+              url: isTg ? parseTelegramPost(server.url)?.normalizedUrl || server.url : server.url,
+              available: true
+          })
+      })
+  } 
+  // 2. Fallback cho dữ liệu cũ (chưa update lên JSON)
+  else {
+      if (episode.hls_url) {
+          options.push({ id: 'hls-old', key: 'hls', label: 'VIP HLS', url: episode.hls_url, available: true })
+      }
+      if (episode.mp4_url) {
+          options.push({ id: 'mp4-old', key: 'mp4', label: 'MP4', url: episode.mp4_url, available: true })
+      }
+      
+      const oldUrl = episode.video_url || episode.backup_url
+      if (oldUrl) {
+          const isTg = isTelegramUrl(oldUrl)
+          options.push({
+              id: 'main-old',
+              key: isTg ? 'telegram' : 'iframe',
+              label: isTg ? 'Telegram' : 'Dự phòng',
+              url: isTg ? parseTelegramPost(oldUrl)?.normalizedUrl || oldUrl : oldUrl,
+              available: true
+          })
+      }
+  }
+
+  return options
 }
 
 function normalizeProgressData(
@@ -355,7 +380,9 @@ export default function PhimPlayerPage({
   const [movie, setMovie] = useState<Movie | null>(null)
   const [episodes, setEpisodes] = useState<Episode[]>([])
   const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null)
-  const [sourceType, setSourceType] = useState<SourceType>('iframe')
+  
+  // Trạng thái server đang được chọn
+  const [activeServerId, setActiveServerId] = useState<string>('')
 
   const [isLoading, setIsLoading] = useState(true)
   const [fetchError, setFetchError] = useState('')
@@ -490,10 +517,13 @@ export default function PhimPlayerPage({
         episodeData[0]
 
       setCurrentEpisode(matchedEpisode)
-      setSourceType(detectSourceType(matchedEpisode))
+      // Thiết lập server mặc định khi chọn tập
+      const options = getSourceOptions(matchedEpisode)
+      if (options.length > 0) {
+          setActiveServerId(options[0].id)
+      }
     } else {
       setCurrentEpisode(null)
-      setSourceType('iframe')
     }
 
     setIsLoading(false)
@@ -504,22 +534,22 @@ export default function PhimPlayerPage({
     fetchMovieData(movieId)
   }, [movieId, fetchMovieData])
 
+  // Lấy danh sách server của tập hiện tại
+  const sourceOptions = useMemo(() => getSourceOptions(currentEpisode), [currentEpisode])
+
+  // Lấy ra thông tin của server đang được chọn để phát
+  const activeSource = useMemo(() => {
+      return sourceOptions.find(s => s.id === activeServerId) || sourceOptions[0]
+  }, [sourceOptions, activeServerId])
+
+  const playableUrl = activeSource?.url || ''
+  const sourceType = activeSource?.key || 'iframe'
+
   useEffect(() => {
     if (!currentEpisode) return
     setPlayerError('')
     persistWatchState(currentEpisode)
-
-    setSourceType((prev) => {
-      const options = getSourceOptions(currentEpisode)
-      return options.some((item) => item.key === prev)
-        ? prev
-        : detectSourceType(currentEpisode)
-    })
   }, [currentEpisode, persistWatchState])
-
-  const playableUrl = useMemo(() => {
-    return getPlayableUrl(currentEpisode, sourceType)
-  }, [currentEpisode, sourceType])
 
   const filteredEpisodes = useMemo(() => {
     const keyword = normalizeText(episodeSearch)
@@ -542,8 +572,6 @@ export default function PhimPlayerPage({
       ? episodes[currentIndex + 1]
       : null
 
-  const sourceOptions = useMemo(() => getSourceOptions(currentEpisode), [currentEpisode])
-
   const episodeProgressMap = useMemo(() => {
     return movie?.id ? getEpisodeProgressMap(movie.id) : {}
   }, [movie?.id, currentEpisode?.id])
@@ -556,6 +584,13 @@ export default function PhimPlayerPage({
     (episode: Episode) => {
       setCurrentEpisode(episode)
       restoreDoneRef.current = null
+      
+      // Khi đổi tập, tự động chọn server đầu tiên của tập đó
+      const newOptions = getSourceOptions(episode)
+      if (newOptions.length > 0) {
+          setActiveServerId(newOptions[0].id)
+      }
+
       if (!isTheaterMode && window.innerWidth >= 1024) {
         window.scrollTo({ top: 0, behavior: 'smooth' })
       }
@@ -680,18 +715,20 @@ export default function PhimPlayerPage({
   }, [])
 
   const tryNextSource = useCallback(() => {
-    if (!currentEpisode) return
-    const options = getSourceOptions(currentEpisode)
-    const currentIdx = options.findIndex((item) => item.key === sourceType)
-    const next = currentIdx >= 0 ? options[currentIdx + 1] : options[0]
+    if (!currentEpisode || sourceOptions.length <= 1) return
+    
+    const currentIdx = sourceOptions.findIndex((item) => item.id === activeServerId)
+    const next = currentIdx >= 0 && currentIdx < sourceOptions.length - 1 
+        ? sourceOptions[currentIdx + 1] 
+        : sourceOptions[0]
 
-    if (next && next.key !== sourceType) {
-      setSourceType(next.key)
+    if (next && next.id !== activeServerId) {
+      setActiveServerId(next.id)
       setPlayerError(`Nguồn phát lỗi. Tự động chuyển qua ${next.label}.`)
     } else {
       setPlayerError('Không có nguồn phát khả dụng vào lúc này.')
     }
-  }, [currentEpisode, sourceType])
+  }, [currentEpisode, sourceOptions, activeServerId])
 
   useEffect(() => {
     const handleBeforeUnload = () => {
@@ -890,7 +927,7 @@ export default function PhimPlayerPage({
                     </div>
                   ) : sourceType === 'iframe' ? (
                     <iframe
-                      key={`${currentEpisode.id}-${sourceType}`}
+                      key={`${currentEpisode.id}-${activeServerId}`}
                       src={playableUrl}
                       className="absolute inset-0 h-full w-full"
                       frameBorder="0"
@@ -900,7 +937,7 @@ export default function PhimPlayerPage({
                     />
                   ) : (
                     <video
-                      key={`${currentEpisode.id}-${sourceType}`}
+                      key={`${currentEpisode.id}-${activeServerId}`}
                       ref={videoRef}
                       src={playableUrl}
                       controls
@@ -929,7 +966,7 @@ export default function PhimPlayerPage({
                   <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
                     <span className="text-5xl opacity-30 animate-pulse">🔌</span>
                     <p className="text-sm font-bold uppercase tracking-widest text-zinc-500">
-                      Nguồn phát đang được cập nhật
+                      Phim chưa có nguồn phát
                     </p>
                   </div>
                 )}
@@ -950,7 +987,7 @@ export default function PhimPlayerPage({
                       Tập {currentEpisode.episode_number}
                     </span>
                     <span className="rounded-lg bg-red-600/80 px-3 py-1.5 text-xs font-bold text-white backdrop-blur-md border border-red-500/50 uppercase">
-                      {sourceOptions.find((item) => item.key === sourceType)?.label || sourceType}
+                      {activeSource?.label || 'NATIVE'}
                     </span>
                   </div>
                 )}
@@ -1031,14 +1068,14 @@ export default function PhimPlayerPage({
                       <span className="text-xs font-medium text-zinc-500 mr-1 hidden sm:block">Nguồn phát:</span>
                       {sourceOptions.filter(i => i.available).map((item) => (
                         <button
-                          key={item.key}
+                          key={item.id}
                           type="button"
                           onClick={() => {
                             setPlayerError('')
-                            setSourceType(item.key)
+                            setActiveServerId(item.id)
                           }}
                           className={`flex h-8 items-center justify-center rounded-lg px-3 text-xs font-bold transition-all ${
-                            sourceType === item.key
+                            activeServerId === item.id
                               ? 'bg-red-500/10 text-red-500 ring-1 ring-red-500/50'
                               : 'bg-transparent text-zinc-400 hover:bg-white/5 hover:text-zinc-200'
                           }`}

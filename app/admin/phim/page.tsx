@@ -8,6 +8,11 @@ const TELEGRAM_PUBLIC_CHANNEL = 'khohoiam'
 const FALLBACK_COVER =
   'https://images.unsplash.com/photo-1614850523459-c2f4c699c52e?auto=format&fit=crop&q=80&w=300&h=400'
 
+type VideoServer = {
+  name: string
+  url: string
+}
+
 type Movie = {
   id: string
   title: string
@@ -28,7 +33,8 @@ type Episode = {
   movie_id: string
   episode_number: number
   title?: string | null
-  video_url?: string | null
+  video_url?: string | null // Giữ lại làm fallback cho code cũ
+  servers?: VideoServer[] | null // Cột JSONB mới thêm
   created_at?: string | null
 }
 
@@ -48,7 +54,7 @@ type MovieForm = {
 type EpisodeForm = {
   episode_number: string
   title: string
-  video_url: string
+  servers: VideoServer[]
 }
 
 const emptyMovieForm: MovieForm = {
@@ -67,7 +73,7 @@ const emptyMovieForm: MovieForm = {
 const emptyEpisodeForm: EpisodeForm = {
   episode_number: '',
   title: '',
-  video_url: '',
+  servers: [{ name: 'Server 1', url: '' }],
 }
 
 const removeAccents = (str: string) =>
@@ -75,33 +81,18 @@ const removeAccents = (str: string) =>
 
 function parseTelegramUrl(input: string) {
   const clean = input.trim()
-
   const publicMatch = clean.match(
     /(?:https?:\/\/)?(?:t\.me|telegram\.me)\/(?:s\/)?([A-Za-z0-9_]+)\/(\d+)(?:\?.*)?$/i
   )
-
   if (publicMatch) {
-    return {
-      channel: publicMatch[1],
-      postId: Number(publicMatch[2]),
-      normalizedUrl: `https://t.me/${publicMatch[1]}/${publicMatch[2]}`,
-      isTelegram: true,
-    }
+    return `https://t.me/${publicMatch[1]}/${publicMatch[2]}`
   }
-
   const internalMatch = clean.match(
     /(?:https?:\/\/)?(?:t\.me|telegram\.me)\/c\/\d+\/(\d+)(?:\?.*)?$/i
   )
-
   if (internalMatch) {
-    return {
-      channel: TELEGRAM_PUBLIC_CHANNEL,
-      postId: Number(internalMatch[1]),
-      normalizedUrl: `https://t.me/${TELEGRAM_PUBLIC_CHANNEL}/${internalMatch[1]}`,
-      isTelegram: true,
-    }
+    return `https://t.me/${TELEGRAM_PUBLIC_CHANNEL}/${internalMatch[1]}`
   }
-
   return null
 }
 
@@ -109,8 +100,8 @@ function processEmbedUrl(input: string) {
   if (!input) return ''
   let processedUrl = input.trim()
 
-  const tg = parseTelegramUrl(processedUrl)
-  if (tg) return tg.normalizedUrl
+  const tgUrl = parseTelegramUrl(processedUrl)
+  if (tgUrl) return tgUrl
 
   if (processedUrl.includes('<iframe') && processedUrl.includes('src=')) {
     const srcMatch = processedUrl.match(/src=["'](.*?)["']/)
@@ -235,10 +226,6 @@ export default function MovieAdmin() {
     return movies.filter((m) => removeAccents(m.title).includes(removeAccents(searchTerm)))
   }, [movies, searchTerm])
 
-  const telegramPreview = useMemo(() => {
-    return parseTelegramUrl(episodeForm.video_url)
-  }, [episodeForm.video_url])
-
   const resetMovieForm = () => {
     setEditingMovieId(null)
     setMovieForm(emptyMovieForm)
@@ -252,7 +239,7 @@ export default function MovieAdmin() {
     setEpisodeForm({
       episode_number: nextNumber,
       title: '',
-      video_url: '',
+      servers: [{ name: 'Server 1', url: '' }],
     })
   }
 
@@ -364,11 +351,43 @@ export default function MovieAdmin() {
 
   const handleEditEpisode = (episode: Episode) => {
     setEditingEpisodeId(episode.id)
+
+    // Nếu tập cũ chưa có servers (dữ liệu cũ), tự tạo 1 mảng từ video_url
+    let currentServers = episode.servers || []
+    if (currentServers.length === 0 && episode.video_url) {
+        currentServers = [{ name: 'Mặc định', url: episode.video_url }]
+    }
+    if (currentServers.length === 0) {
+        currentServers = [{ name: 'Server 1', url: '' }]
+    }
+
     setEpisodeForm({
       episode_number: String(episode.episode_number),
       title: episode.title || '',
-      video_url: episode.video_url || '',
+      servers: currentServers,
     })
+  }
+
+  const handleAddServer = () => {
+      setEpisodeForm(prev => ({
+          ...prev,
+          servers: [...prev.servers, { name: `Server ${prev.servers.length + 1}`, url: '' }]
+      }))
+  }
+
+  const handleRemoveServer = (index: number) => {
+      setEpisodeForm(prev => ({
+          ...prev,
+          servers: prev.servers.filter((_, i) => i !== index)
+      }))
+  }
+
+  const handleServerChange = (index: number, field: 'name' | 'url', value: string) => {
+      setEpisodeForm(prev => {
+          const newServers = [...prev.servers]
+          newServers[index][field] = value
+          return { ...prev, servers: newServers }
+      })
   }
 
   const handleSaveEpisode = async (e: React.FormEvent) => {
@@ -379,20 +398,28 @@ export default function MovieAdmin() {
       return
     }
 
-    if (!episodeForm.episode_number || !episodeForm.title.trim() || !episodeForm.video_url.trim()) {
-      toast.error('Vui lòng nhập đủ thông tin tập phim')
+    if (!episodeForm.episode_number) {
+      toast.error('Vui lòng nhập số tập')
       return
     }
 
-    const cleanedUrl = processEmbedUrl(episodeForm.video_url)
+    // Lọc ra các server hợp lệ (có url) và xử lý nhúng URL
+    const validServers = episodeForm.servers
+        .filter(s => s.url.trim() !== '')
+        .map(s => ({
+            name: s.name.trim() || 'Server',
+            url: processEmbedUrl(s.url)
+        }))
 
-    if (cleanedUrl.includes('/c/')) {
-      toast.error('Link Telegram /c/... không dùng được trên web. Hãy dùng link public.')
-      return
+    if (validServers.length === 0) {
+        toast.error('Vui lòng nhập ít nhất 1 link video hợp lệ')
+        return
     }
 
-    if (cleanedUrl.includes('t.me/') && !parseTelegramUrl(cleanedUrl)) {
-      toast.error('Link Telegram không hợp lệ')
+    // Check link Telegram /c/
+    const hasInvalidTelegram = validServers.some(s => s.url.includes('/c/'))
+    if (hasInvalidTelegram) {
+      toast.error('Link Telegram /c/... không dùng được. Hãy dùng link public.')
       return
     }
 
@@ -414,7 +441,9 @@ export default function MovieAdmin() {
       movie_id: selectedMovieId,
       episode_number: Number(episodeForm.episode_number),
       title: episodeForm.title.trim(),
-      video_url: cleanedUrl,
+      servers: validServers,
+      // Lưu link đầu tiên vào video_url để tương thích ngược với code cũ nếu cần
+      video_url: validServers[0].url
     }
 
     if (editingEpisodeId) {
@@ -811,67 +840,80 @@ export default function MovieAdmin() {
             ) : (
               <div className="grid grid-cols-1 gap-5 xl:grid-cols-[360px_1fr]">
                 <form onSubmit={handleSaveEpisode} className="space-y-4">
-                  <div>
-                    <label className="mb-1 block font-medium text-zinc-400">Số tập</label>
-                    <input
-                      type="number"
-                      value={episodeForm.episode_number}
-                      onChange={(e) =>
-                        setEpisodeForm({ ...episodeForm, episode_number: e.target.value })
-                      }
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 outline-none text-zinc-100 focus:border-red-500"
-                    />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="mb-1 block font-medium text-zinc-400">Số tập</label>
+                      <input
+                        type="number"
+                        value={episodeForm.episode_number}
+                        onChange={(e) =>
+                          setEpisodeForm({ ...episodeForm, episode_number: e.target.value })
+                        }
+                        className="w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 outline-none text-zinc-100 focus:border-red-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block font-medium text-zinc-400">Tên hiển thị</label>
+                      <input
+                        value={episodeForm.title}
+                        onChange={(e) =>
+                          setEpisodeForm({ ...episodeForm, title: e.target.value })
+                        }
+                        className="w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 outline-none text-zinc-100 focus:border-red-500"
+                        placeholder="VD: Tập 1"
+                      />
+                    </div>
                   </div>
 
-                  <div>
-                    <label className="mb-1 block font-medium text-zinc-400">Tên hiển thị</label>
-                    <input
-                      value={episodeForm.title}
-                      onChange={(e) =>
-                        setEpisodeForm({ ...episodeForm, title: e.target.value })
-                      }
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 outline-none text-zinc-100 focus:border-red-500"
-                      placeholder="Tập 1"
-                    />
+                  {/* KHU VỰC QUẢN LÝ NHIỀU SERVER */}
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+                    <div className="mb-3 flex items-center justify-between border-b border-zinc-800/60 pb-2">
+                      <label className="font-bold text-zinc-300">Danh sách Link Video</label>
+                      <button
+                        type="button"
+                        onClick={handleAddServer}
+                        className="rounded-lg bg-zinc-800 px-2 py-1 text-[10px] font-bold text-zinc-200 hover:bg-zinc-700"
+                      >
+                        + Thêm Server
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {episodeForm.servers.map((server, index) => (
+                        <div key={index} className="flex flex-col gap-1 rounded-lg border border-zinc-800/50 bg-zinc-900/50 p-2">
+                          <div className="flex items-center justify-between mb-1">
+                             <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Server {index + 1}</span>
+                             {episodeForm.servers.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveServer(index)}
+                                  className="text-[10px] text-red-500 hover:text-red-400 font-bold"
+                                >
+                                  Xóa bỏ
+                                </button>
+                             )}
+                          </div>
+                          <div className="flex gap-2">
+                            <input
+                              value={server.name}
+                              onChange={(e) => handleServerChange(index, 'name', e.target.value)}
+                              className="w-[100px] rounded-md border border-zinc-700 bg-zinc-950 p-2 text-xs outline-none text-zinc-100 focus:border-red-500"
+                              placeholder="Ok.ru, Bilibili..."
+                            />
+                            <input
+                              value={server.url}
+                              onChange={(e) => handleServerChange(index, 'url', e.target.value)}
+                              className="flex-1 rounded-md border border-zinc-700 bg-zinc-950 p-2 text-xs font-mono outline-none text-blue-400 focus:border-red-500"
+                              placeholder="Dán link hoặc iframe..."
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
-                  <div>
-                    <label className="mb-1 block font-medium text-zinc-400">
-                      Link video / Telegram / iframe
-                    </label>
-                    <input
-                      value={episodeForm.video_url}
-                      onChange={(e) =>
-                        setEpisodeForm({
-                          ...episodeForm,
-                          video_url: processEmbedUrl(e.target.value),
-                        })
-                      }
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs outline-none text-blue-400 focus:border-red-500"
-                      placeholder="https://t.me/khohoiam/2 hoặc iframe khác..."
-                    />
-                  </div>
-
-                  <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 text-xs">
-                    {telegramPreview ? (
-                      <div className="space-y-1 text-zinc-300">
-                        <p>
-                          Kênh: <span className="font-bold text-white">@{telegramPreview.channel}</span>
-                        </p>
-                        <p>
-                          Post ID: <span className="font-bold text-white">{telegramPreview.postId}</span>
-                        </p>
-                        <p className="break-all text-zinc-500">{telegramPreview.normalizedUrl}</p>
-                      </div>
-                    ) : (
-                      <p className="text-zinc-500">
-                        Nếu dán link <span className="font-mono">t.me/c/...</span>, hệ thống sẽ tự đổi sang
-                        public channel <span className="font-bold text-red-400">@{TELEGRAM_PUBLIC_CHANNEL}</span>.
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="flex gap-3">
+                  <div className="flex gap-3 pt-2">
                     <button
                       type="submit"
                       disabled={isSavingEpisode}
@@ -913,51 +955,62 @@ export default function MovieAdmin() {
                         Phim này chưa có tập nào
                       </div>
                     ) : (
-                      episodes.map((ep) => (
-                        <div
-                          key={ep.id}
-                          className={`rounded-xl border p-3 transition ${
-                            editingEpisodeId === ep.id
-                              ? 'border-red-500/30 bg-red-500/10'
-                              : 'border-zinc-800 bg-zinc-900/30'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                              <div className="mb-2 flex items-center gap-2">
-                                <span className="rounded-lg bg-zinc-800 px-2.5 py-1 text-[10px] font-black text-red-400">
-                                  Tập {ep.episode_number}
-                                </span>
-                                <h4 className="truncate text-xs font-bold text-zinc-100">
-                                  {ep.title || `Tập ${ep.episode_number}`}
-                                </h4>
+                      episodes.map((ep) => {
+                        // Hỗ trợ hiển thị cho cả data cũ và mới
+                        const currentServers = ep.servers || (ep.video_url ? [{ name: 'Mặc định', url: ep.video_url }] : [])
+
+                        return (
+                          <div
+                            key={ep.id}
+                            className={`rounded-xl border p-3 transition ${
+                              editingEpisodeId === ep.id
+                                ? 'border-red-500/30 bg-red-500/10'
+                                : 'border-zinc-800 bg-zinc-900/30'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="mb-2 flex items-center gap-2">
+                                  <span className="rounded-lg bg-zinc-800 px-2.5 py-1 text-[10px] font-black text-red-400">
+                                    Tập {ep.episode_number}
+                                  </span>
+                                  <h4 className="truncate text-xs font-bold text-zinc-100">
+                                    {ep.title || `Tập ${ep.episode_number}`}
+                                  </h4>
+                                </div>
+
+                                {/* Hiển thị danh sách badge server */}
+                                <div className="mb-2 flex flex-wrap gap-1">
+                                  {currentServers.map((s, i) => (
+                                     <span key={i} className="rounded border border-zinc-700 bg-zinc-800/50 px-1.5 py-0.5 text-[9px] text-zinc-400">
+                                       {s.name}
+                                     </span>
+                                  ))}
+                                </div>
+
+                                <p className="text-[10px] text-zinc-500">
+                                  Tạo ngày: {formatDate(ep.created_at)}
+                                </p>
                               </div>
 
-                              <p className="mb-1 break-all text-[10px] text-blue-400">
-                                {ep.video_url}
-                              </p>
-                              <p className="text-[10px] text-zinc-500">
-                                Tạo ngày: {formatDate(ep.created_at)}
-                              </p>
-                            </div>
-
-                            <div className="flex shrink-0 gap-1.5">
-                              <button
-                                onClick={() => handleEditEpisode(ep)}
-                                className="rounded-md bg-zinc-800 px-2.5 py-1 text-[10px] font-bold text-zinc-200 hover:bg-zinc-700"
-                              >
-                                Sửa
-                              </button>
-                              <button
-                                onClick={() => handleDeleteEpisode(ep)}
-                                className="rounded-md bg-red-500/10 px-2.5 py-1 text-[10px] font-bold text-red-400 hover:bg-red-500 hover:text-white"
-                              >
-                                Xóa
-                              </button>
+                              <div className="flex shrink-0 flex-col gap-1.5">
+                                <button
+                                  onClick={() => handleEditEpisode(ep)}
+                                  className="rounded-md bg-zinc-800 px-2.5 py-1 text-[10px] font-bold text-zinc-200 hover:bg-zinc-700"
+                                >
+                                  Sửa
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteEpisode(ep)}
+                                  className="rounded-md bg-red-500/10 px-2.5 py-1 text-[10px] font-bold text-red-400 hover:bg-red-500 hover:text-white"
+                                >
+                                  Xóa
+                                </button>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      ))
+                        )
+                      })
                     )}
                   </div>
                 </div>

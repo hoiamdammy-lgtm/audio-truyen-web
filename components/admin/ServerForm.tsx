@@ -86,10 +86,10 @@ export default function ServerForm({
               >
                 <option value="direct">Direct</option>
                 <option value="okru">OK.ru</option>
-                <option value="bilibili">Bilibili</option>
+                <option value="dailymotion">Dailymotion</option>
+                <option value="Seekstreaming">Seekstreaming</option>
                 <option value="google_drive">Google Drive</option>
                 <option value="youtube">YouTube</option>
-                <option value="seekstreaming">seekstreaming</option>
                 <option value="auto">Tự nhận diện</option>
               </select>
             </div>

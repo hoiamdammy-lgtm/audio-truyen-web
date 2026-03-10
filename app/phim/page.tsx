@@ -654,7 +654,7 @@ export default function PhimPage() {
     <main className="min-h-screen bg-[#09090b] text-white">
       <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top,rgba(220,38,38,0.14),transparent_28%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.04),transparent_18%),linear-gradient(to_bottom,#09090b,#09090b)]" />
 
-      <header className="sticky top-0 z-50 border-b border-white/5 bg-[#09090b]/88 backdrop-blur-xl">
+      <header className="border-b border-white/5 bg-[#09090b]/95 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-3 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between gap-3">
             <Link href="/" className="flex min-w-0 items-center gap-3">
@@ -713,8 +713,18 @@ export default function PhimPage() {
                 placeholder="Tìm tên phim, mô tả, từ khóa..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.05] pl-11 pr-4 text-sm text-white outline-none transition placeholder:text-zinc-500 focus:border-red-500/35 focus:bg-white/[0.08]"
+                className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.05] pl-11 pr-12 text-sm text-white outline-none transition placeholder:text-zinc-500 focus:border-red-500/35 focus:bg-white/[0.08]"
               />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-3 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-sm text-zinc-400 transition hover:bg-white/10 hover:text-white"
+                  aria-label="Xóa tìm kiếm"
+                >
+                  ✕
+                </button>
+              )}
             </div>
 
             <select

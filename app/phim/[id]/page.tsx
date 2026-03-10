@@ -24,23 +24,28 @@ const FALLBACK_COVER =
 const INTRO_SKIP_SECONDS = 85
 const SEEK_STEP = 10
 
-// --- Thêm type VideoServer ---
-type VideoServer = {
-  name: string
-  url: string
-}
-
 type Episode = {
   id: string
   movie_id: string
   title?: string | null
   episode_number: number
-  video_url?: string | null
-  hls_url?: string | null
-  mp4_url?: string | null
-  backup_url?: string | null
-  servers?: VideoServer[] | null // Cột JSONB mới
   created_at?: string | null
+}
+
+type EpisodeServer = {
+  id: string
+  episode_id: string
+  name: string
+  provider?: string | null
+  url: string
+  embed_url?: string | null
+  source_type?: string | null
+  sort_order: number
+  is_active: boolean
+  is_primary: boolean
+  note?: string | null
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 type Movie = {
@@ -87,13 +92,15 @@ type PlayerPrefs = {
 
 type SourceType = 'telegram' | 'iframe' | 'hls' | 'mp4'
 
-// Cập nhật lại SourceOption để hỗ trợ dữ liệu server mới
 type SourceOption = {
-  id: string // Dùng id để phân biệt thay vì chỉ dùng type (vì có thể có 2 iframe)
+  id: string
   key: SourceType
   label: string
   url: string
   available: boolean
+  provider?: string | null
+  isPrimary?: boolean
+  sortOrder?: number
 }
 
 function safeRead<T>(key: string, fallback: T): T {
@@ -147,58 +154,43 @@ function isTelegramUrl(url?: string | null) {
   return !!parseTelegramPost(url)
 }
 
-// --- Logic mới để tạo mảng SourceOptions từ cột `servers` ---
-function getSourceOptions(episode?: Episode | null): SourceOption[] {
-  if (!episode) return []
-  
-  const options: SourceOption[] = []
+function detectSourceType(url?: string | null, provider?: string | null): SourceType {
+  const value = url?.toLowerCase() || ''
+  const p = provider?.toLowerCase() || ''
 
-  // 1. Ưu tiên đọc từ cột JSON `servers` mới
-  if (episode.servers && Array.isArray(episode.servers) && episode.servers.length > 0) {
-      episode.servers.forEach((server, index) => {
-          if (!server.url) return;
-          
-          const isTg = isTelegramUrl(server.url)
-          const isHls = server.url.includes('.m3u8')
-          const isMp4 = server.url.endsWith('.mp4')
+  if (p === 'telegram' || isTelegramUrl(value)) return 'telegram'
+  if (value.includes('.m3u8')) return 'hls'
+  if (value.endsWith('.mp4') || value.includes('.mp4?')) return 'mp4'
+  return 'iframe'
+}
 
-          let type: SourceType = 'iframe'
-          if (isTg) type = 'telegram'
-          else if (isHls) type = 'hls'
-          else if (isMp4) type = 'mp4'
+function getSourceOptions(servers: EpisodeServer[]): SourceOption[] {
+  return [...servers]
+    .filter((server) => server.is_active && !!server.url)
+    .sort((a, b) => {
+      if (a.is_primary === b.is_primary) return a.sort_order - b.sort_order
+      return a.is_primary ? -1 : 1
+    })
+    .map((server) => {
+      const type = detectSourceType(server.embed_url || server.url, server.provider)
+      const finalUrl =
+        type === 'telegram'
+          ? parseTelegramPost(server.embed_url || server.url)?.normalizedUrl ||
+            server.embed_url ||
+            server.url
+          : server.embed_url || server.url
 
-          options.push({
-              id: `server-${index}`,
-              key: type,
-              label: server.name || `Server ${index + 1}`,
-              url: isTg ? parseTelegramPost(server.url)?.normalizedUrl || server.url : server.url,
-              available: true
-          })
-      })
-  } 
-  // 2. Fallback cho dữ liệu cũ (chưa update lên JSON)
-  else {
-      if (episode.hls_url) {
-          options.push({ id: 'hls-old', key: 'hls', label: 'VIP HLS', url: episode.hls_url, available: true })
+      return {
+        id: server.id,
+        key: type,
+        label: server.name || 'Server',
+        url: finalUrl,
+        available: true,
+        provider: server.provider,
+        isPrimary: server.is_primary,
+        sortOrder: server.sort_order,
       }
-      if (episode.mp4_url) {
-          options.push({ id: 'mp4-old', key: 'mp4', label: 'MP4', url: episode.mp4_url, available: true })
-      }
-      
-      const oldUrl = episode.video_url || episode.backup_url
-      if (oldUrl) {
-          const isTg = isTelegramUrl(oldUrl)
-          options.push({
-              id: 'main-old',
-              key: isTg ? 'telegram' : 'iframe',
-              label: isTg ? 'Telegram' : 'Dự phòng',
-              url: isTg ? parseTelegramPost(oldUrl)?.normalizedUrl || oldUrl : oldUrl,
-              available: true
-          })
-      }
-  }
-
-  return options
+    })
 }
 
 function normalizeProgressData(
@@ -251,8 +243,11 @@ const TelegramPostEmbed = memo(function TelegramPostEmbed({ url }: { url: string
   if (!telegram) return null
 
   return (
-    <div className="flex h-full w-full items-center justify-center overflow-auto p-4 md:p-6 bg-[#0a0a0a]">
-      <div ref={containerRef} className="w-full max-w-[600px] shadow-2xl rounded-2xl overflow-hidden" />
+    <div className="flex h-full w-full items-center justify-center overflow-auto bg-[#0a0a0a] p-4 md:p-6">
+      <div
+        ref={containerRef}
+        className="w-full max-w-[600px] overflow-hidden rounded-2xl shadow-2xl"
+      />
     </div>
   )
 })
@@ -288,27 +283,34 @@ const EpisodeGrid = memo(function EpisodeGrid({
             type="button"
             onClick={() => onSelect(ep)}
             title={ep.title || `Tập ${ep.episode_number}`}
-            className={`group relative flex flex-col items-center justify-center overflow-hidden rounded-xl py-3 px-2 transition-all duration-300 ${
+            className={`group relative flex flex-col items-center justify-center overflow-hidden rounded-xl px-2 py-3 transition-all duration-300 ${
               isPlaying
-                ? 'bg-red-600 shadow-[0_4px_20px_-4px_rgba(220,38,38,0.5)] ring-2 ring-red-500 ring-offset-2 ring-offset-[#0d0d0f] scale-105 z-10'
-                : 'bg-white/[0.03] border border-white/10 hover:bg-white/[0.08] hover:border-white/20 hover:-translate-y-0.5'
+                ? 'z-10 scale-105 bg-red-600 shadow-[0_4px_20px_-4px_rgba(220,38,38,0.5)] ring-2 ring-red-500 ring-offset-2 ring-offset-[#0d0d0f]'
+                : 'border border-white/10 bg-white/[0.03] hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/[0.08]'
             }`}
           >
-            <div className="relative z-10 flex flex-col items-center gap-1">
+            <div className="relative z-10 flex flex-col items-center gap-1 text-center">
               <span
                 className={`text-[10px] font-medium uppercase tracking-widest ${
                   isPlaying ? 'text-red-100' : 'text-zinc-500 group-hover:text-zinc-400'
                 }`}
               >
-                Tập
+                Tập {ep.episode_number}
               </span>
-              <span className={`text-base font-bold ${isPlaying ? 'text-white' : 'text-zinc-300'}`}>
-                {ep.episode_number}
-              </span>
+
+              {!!ep.title?.trim() && ep.title.trim() !== `Tập ${ep.episode_number}` && (
+                <span
+                  className={`line-clamp-2 text-[11px] font-semibold leading-4 ${
+                    isPlaying ? 'text-white' : 'text-zinc-300'
+                  }`}
+                >
+                  {ep.title.trim()}
+                </span>
+              )}
             </div>
 
             {progress > 0 && (
-              <div className="absolute bottom-0 left-0 w-full h-1 bg-white/10">
+              <div className="absolute bottom-0 left-0 h-1 w-full bg-white/10">
                 <div
                   className={`h-full ${isPlaying ? 'bg-white' : 'bg-red-500'}`}
                   style={{ width: `${progress}%` }}
@@ -341,7 +343,7 @@ const ShortcutModal = memo(function ShortcutModal({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 px-4 backdrop-blur-md transition-opacity duration-300">
-      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#121214] p-6 shadow-2xl scale-100 animate-in fade-in zoom-in-95 duration-200">
+      <div className="animate-in fade-in zoom-in-95 w-full max-w-md scale-100 rounded-3xl border border-white/10 bg-[#121214] p-6 shadow-2xl duration-200">
         <div className="mb-6 flex items-center justify-between">
           <h2 className="text-xl font-bold text-white">Phím tắt</h2>
           <button
@@ -357,7 +359,7 @@ const ShortcutModal = memo(function ShortcutModal({
           {items.map(([key, value]) => (
             <div
               key={key}
-              className="flex items-center justify-between rounded-xl bg-black/40 px-4 py-3 border border-white/5"
+              className="flex items-center justify-between rounded-xl border border-white/5 bg-black/40 px-4 py-3"
             >
               <span className="rounded bg-white/10 px-2 py-1 text-xs font-bold text-white">{key}</span>
               <span className="text-sm font-medium text-zinc-400">{value}</span>
@@ -379,9 +381,8 @@ export default function PhimPlayerPage({
 
   const [movie, setMovie] = useState<Movie | null>(null)
   const [episodes, setEpisodes] = useState<Episode[]>([])
+  const [episodeServersMap, setEpisodeServersMap] = useState<Record<string, EpisodeServer[]>>({})
   const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null)
-  
-  // Trạng thái server đang được chọn
   const [activeServerId, setActiveServerId] = useState<string>('')
 
   const [isLoading, setIsLoading] = useState(true)
@@ -490,7 +491,7 @@ export default function PhimPlayerPage({
       supabase.from('movies').select('*').eq('id', id).single(),
       supabase
         .from('episodes')
-        .select('*')
+        .select('id, movie_id, title, episode_number, created_at')
         .eq('movie_id', id)
         .order('episode_number', { ascending: true }),
     ])
@@ -507,25 +508,46 @@ export default function PhimPlayerPage({
     setMovie(movieData)
     setEpisodes(episodeData)
 
-    if (episodeData.length > 0) {
-      const stored = safeRead<Record<string, WatchState>>(STORAGE_PLAYER_STATE, {})
-      const last = stored[id]
-
-      const matchedEpisode =
-        episodeData.find((ep) => ep.id === last?.episodeId) ||
-        episodeData.find((ep) => ep.episode_number === last?.episodeNumber) ||
-        episodeData[0]
-
-      setCurrentEpisode(matchedEpisode)
-      // Thiết lập server mặc định khi chọn tập
-      const options = getSourceOptions(matchedEpisode)
-      if (options.length > 0) {
-          setActiveServerId(options[0].id)
-      }
-    } else {
+    if (episodeData.length === 0) {
       setCurrentEpisode(null)
+      setEpisodeServersMap({})
+      setIsLoading(false)
+      return
     }
 
+    const episodeIds = episodeData.map((ep) => ep.id)
+
+    const serverRes = await supabase
+      .from('episode_servers')
+      .select('*')
+      .in('episode_id', episodeIds)
+      .eq('is_active', true)
+      .order('episode_id', { ascending: true })
+      .order('is_primary', { ascending: false })
+      .order('sort_order', { ascending: true })
+
+    const serverList = (serverRes.data as EpisodeServer[]) || []
+    const groupedServers = serverList.reduce<Record<string, EpisodeServer[]>>((acc, item) => {
+      if (!acc[item.episode_id]) acc[item.episode_id] = []
+      acc[item.episode_id].push(item)
+      return acc
+    }, {})
+
+    setEpisodeServersMap(groupedServers)
+
+    const stored = safeRead<Record<string, WatchState>>(STORAGE_PLAYER_STATE, {})
+    const last = stored[id]
+
+    const matchedEpisode =
+      episodeData.find((ep) => ep.id === last?.episodeId) ||
+      episodeData.find((ep) => ep.episode_number === last?.episodeNumber) ||
+      episodeData[0]
+
+    setCurrentEpisode(matchedEpisode)
+
+    const matchedEpisodeServers = groupedServers[matchedEpisode.id] || []
+    const sourceOptions = getSourceOptions(matchedEpisodeServers)
+    setActiveServerId(sourceOptions[0]?.id || '')
     setIsLoading(false)
   }, [])
 
@@ -534,12 +556,17 @@ export default function PhimPlayerPage({
     fetchMovieData(movieId)
   }, [movieId, fetchMovieData])
 
-  // Lấy danh sách server của tập hiện tại
-  const sourceOptions = useMemo(() => getSourceOptions(currentEpisode), [currentEpisode])
+  const currentEpisodeServers = useMemo(() => {
+    if (!currentEpisode) return []
+    return episodeServersMap[currentEpisode.id] || []
+  }, [episodeServersMap, currentEpisode])
 
-  // Lấy ra thông tin của server đang được chọn để phát
+  const sourceOptions = useMemo(() => {
+    return getSourceOptions(currentEpisodeServers)
+  }, [currentEpisodeServers])
+
   const activeSource = useMemo(() => {
-      return sourceOptions.find(s => s.id === activeServerId) || sourceOptions[0]
+    return sourceOptions.find((s) => s.id === activeServerId) || sourceOptions[0]
   }, [sourceOptions, activeServerId])
 
   const playableUrl = activeSource?.url || ''
@@ -550,6 +577,15 @@ export default function PhimPlayerPage({
     setPlayerError('')
     persistWatchState(currentEpisode)
   }, [currentEpisode, persistWatchState])
+
+  useEffect(() => {
+    if (!currentEpisode) return
+    const options = getSourceOptions(episodeServersMap[currentEpisode.id] || [])
+    setActiveServerId((prev) => {
+      if (prev && options.some((item) => item.id === prev)) return prev
+      return options[0]?.id || ''
+    })
+  }, [currentEpisode, episodeServersMap])
 
   const filteredEpisodes = useMemo(() => {
     const keyword = normalizeText(episodeSearch)
@@ -584,18 +620,16 @@ export default function PhimPlayerPage({
     (episode: Episode) => {
       setCurrentEpisode(episode)
       restoreDoneRef.current = null
-      
-      // Khi đổi tập, tự động chọn server đầu tiên của tập đó
-      const newOptions = getSourceOptions(episode)
-      if (newOptions.length > 0) {
-          setActiveServerId(newOptions[0].id)
-      }
+      setPlayerError('')
+
+      const nextOptions = getSourceOptions(episodeServersMap[episode.id] || [])
+      setActiveServerId(nextOptions[0]?.id || '')
 
       if (!isTheaterMode && window.innerWidth >= 1024) {
         window.scrollTo({ top: 0, behavior: 'smooth' })
       }
     },
-    [isTheaterMode]
+    [episodeServersMap, isTheaterMode]
   )
 
   const toggleAutoNext = useCallback(() => {
@@ -715,11 +749,15 @@ export default function PhimPlayerPage({
   }, [])
 
   const tryNextSource = useCallback(() => {
-    if (!currentEpisode || sourceOptions.length <= 1) return
-    
+    if (!currentEpisode || sourceOptions.length <= 1) {
+      setPlayerError('Không có nguồn phát khả dụng vào lúc này.')
+      return
+    }
+
     const currentIdx = sourceOptions.findIndex((item) => item.id === activeServerId)
-    const next = currentIdx >= 0 && currentIdx < sourceOptions.length - 1 
-        ? sourceOptions[currentIdx + 1] 
+    const next =
+      currentIdx >= 0 && currentIdx < sourceOptions.length - 1
+        ? sourceOptions[currentIdx + 1]
         : sourceOptions[0]
 
     if (next && next.id !== activeServerId) {
@@ -795,7 +833,7 @@ export default function PhimPlayerPage({
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-950 font-bold text-red-500">
         <div className="mb-6 h-14 w-14 animate-spin rounded-full border-4 border-red-500/20 border-t-red-500 shadow-[0_0_20px_rgba(239,68,68,0.5)]" />
-        <span className="tracking-widest animate-pulse">ĐANG TẢI DỮ LIỆU...</span>
+        <span className="animate-pulse tracking-widest">ĐANG TẢI DỮ LIỆU...</span>
       </div>
     )
   }
@@ -803,13 +841,13 @@ export default function PhimPlayerPage({
   if (fetchError) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-950 px-6 text-center">
-        <div className="rounded-3xl border border-white/10 bg-[#121214] p-10 shadow-2xl max-w-md w-full">
+        <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#121214] p-10 shadow-2xl">
           <div className="mb-6 text-6xl">⚠️</div>
-          <h2 className="text-xl font-bold text-white leading-relaxed">{fetchError}</h2>
+          <h2 className="text-xl font-bold leading-relaxed text-white">{fetchError}</h2>
           <button
             type="button"
             onClick={() => movieId && fetchMovieData(movieId)}
-            className="mt-8 w-full h-12 rounded-xl bg-red-600 font-bold text-white transition hover:bg-red-500 hover:shadow-lg hover:shadow-red-600/20"
+            className="mt-8 h-12 w-full rounded-xl bg-red-600 font-bold text-white transition hover:bg-red-500 hover:shadow-lg hover:shadow-red-600/20"
           >
             Tải lại trang
           </button>
@@ -820,7 +858,7 @@ export default function PhimPlayerPage({
 
   if (!movie) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-500 font-medium text-lg">
+      <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-lg font-medium text-zinc-500">
         Không tìm thấy dữ liệu phim.
       </div>
     )
@@ -894,27 +932,25 @@ export default function PhimPlayerPage({
                   : 'bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white'
               }`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill={isFavorite ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill={isFavorite ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
               {isFavorite ? 'Đã lưu' : 'Yêu thích'}
             </button>
           </div>
         </div>
       </header>
 
-      <div className={`mx-auto w-full px-4 py-6 sm:px-6 lg:px-8 transition-all duration-500 ${isTheaterMode ? 'max-w-[2000px]' : 'max-w-[1800px]'}`}>
+      <div className={`mx-auto w-full px-4 py-6 transition-all duration-500 sm:px-6 lg:px-8 ${isTheaterMode ? 'max-w-[2000px]' : 'max-w-[1800px]'}`}>
         <div className={`flex flex-col gap-6 lg:gap-8 ${isTheaterMode ? '' : 'lg:flex-row'}`}>
-          
-          {/* Main Player Section */}
-          <div className={`flex flex-col transition-all duration-500 ${isLightsOut ? 'z-50' : 'z-10'} ${isTheaterMode ? 'w-full' : 'w-full lg:w-[65%] xl:w-[70%]'}`}>
-            <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#0d0d0f] shadow-2xl ring-1 ring-white/5 flex flex-col">
+          <div className={`flex flex-col transition-all duration-500 ${isLightsOut ? 'z-50' : 'z-10'} ${isTheaterMode ? 'w-full' : 'w-full shrink-0 lg:w-[65%] xl:w-[70%]'}`}>
+            <section className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0d0d0f] shadow-2xl ring-1 ring-white/5">
               <div
                 ref={playerContainerRef}
                 onDoubleClick={() => {
                   if (canUseNativeVideo) void handleToggleFullscreen()
                 }}
-                className={`relative w-full bg-black flex-shrink-0 transition-all duration-500 ${
+                className={`relative w-full flex-shrink-0 bg-black transition-all duration-500 ${
                   isTelegramSource
-                    ? 'h-[40vh] sm:h-[50vh] lg:h-[65vh] min-h-[350px]'
+                    ? 'h-[40vh] min-h-[350px] sm:h-[50vh] lg:h-[65vh]'
                     : isTheaterMode
                       ? 'aspect-video max-h-[85vh]'
                       : 'aspect-video'
@@ -964,14 +1000,13 @@ export default function PhimPlayerPage({
                   )
                 ) : (
                   <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-                    <span className="text-5xl opacity-30 animate-pulse">🔌</span>
+                    <span className="animate-pulse text-5xl opacity-30">🔌</span>
                     <p className="text-sm font-bold uppercase tracking-widest text-zinc-500">
                       Phim chưa có nguồn phát
                     </p>
                   </div>
                 )}
 
-                {/* Overlays */}
                 <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/80 to-transparent" />
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/80 to-transparent" />
 
@@ -981,29 +1016,29 @@ export default function PhimPlayerPage({
                   </div>
                 )}
 
-                {canUseNativeVideo && currentEpisode && (
-                  <div className="absolute top-4 right-4 z-20 hidden items-center gap-2 sm:flex">
-                    <span className="rounded-lg bg-black/50 px-3 py-1.5 text-xs font-bold text-white backdrop-blur-md border border-white/10">
+                {currentEpisode && (
+                  <div className="absolute right-4 top-4 z-20 hidden items-center gap-2 sm:flex">
+                    <span className="rounded-lg border border-white/10 bg-black/50 px-3 py-1.5 text-xs font-bold text-white backdrop-blur-md">
                       Tập {currentEpisode.episode_number}
                     </span>
-                    <span className="rounded-lg bg-red-600/80 px-3 py-1.5 text-xs font-bold text-white backdrop-blur-md border border-red-500/50 uppercase">
-                      {activeSource?.label || 'NATIVE'}
-                    </span>
+                    {activeSource && (
+                      <span className="rounded-lg border border-red-500/50 bg-red-600/80 px-3 py-1.5 text-xs font-bold uppercase text-white backdrop-blur-md">
+                        {activeSource.label}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
 
-              {/* Player Controls Toolbar */}
               <div className="border-t border-white/5 bg-[#121214] p-4 sm:px-6">
                 <div className="flex flex-col gap-4">
-                  
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
                         disabled={!prevEpisode}
                         onClick={() => prevEpisode && handleChangeEpisode(prevEpisode)}
-                        className="flex h-10 flex-1 sm:flex-none items-center justify-center gap-2 rounded-xl bg-white/5 px-4 text-sm font-semibold text-zinc-300 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+                        className="flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-white/5 text-sm font-semibold text-zinc-300 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 sm:flex-none sm:px-4"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" x2="5" y1="19" y2="5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
                         <span className="hidden sm:inline">Tập trước</span>
@@ -1013,14 +1048,14 @@ export default function PhimPlayerPage({
                         type="button"
                         disabled={!nextEpisode}
                         onClick={() => nextEpisode && handleChangeEpisode(nextEpisode)}
-                        className="flex h-10 flex-1 sm:flex-none items-center justify-center gap-2 rounded-xl bg-red-600 px-5 text-sm font-bold text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-30"
+                        className="flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 text-sm font-bold text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-30 sm:flex-none sm:px-5"
                       >
                         <span className="hidden sm:inline">Tập tiếp</span>
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
                       </button>
                     </div>
 
-                    <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 hide-scrollbar">
+                    <div className="hide-scrollbar flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
                       {canUseNativeVideo && (
                         <>
                           <button
@@ -1063,10 +1098,12 @@ export default function PhimPlayerPage({
                     </div>
                   </div>
 
-                  <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 border-t border-white/5 pt-4">
+                  <div className="flex flex-col justify-between gap-4 border-t border-white/5 pt-4 xl:flex-row xl:items-center">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-medium text-zinc-500 mr-1 hidden sm:block">Nguồn phát:</span>
-                      {sourceOptions.filter(i => i.available).map((item) => (
+                      <span className="mr-1 hidden text-xs font-medium text-zinc-500 sm:block">
+                        Nguồn phát:
+                      </span>
+                      {sourceOptions.filter((i) => i.available).map((item) => (
                         <button
                           key={item.id}
                           type="button"
@@ -1081,6 +1118,7 @@ export default function PhimPlayerPage({
                           }`}
                         >
                           {item.label}
+                          {item.isPrimary ? ' • Chính' : ''}
                         </button>
                       ))}
                     </div>
@@ -1112,7 +1150,7 @@ export default function PhimPlayerPage({
                             Full
                           </button>
 
-                          <div className="hidden sm:flex h-8 items-center gap-2 rounded-lg bg-white/5 px-3">
+                          <div className="hidden h-8 items-center gap-2 rounded-lg bg-white/5 px-3 sm:flex">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-zinc-400"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
                             <input
                               type="range"
@@ -1129,13 +1167,13 @@ export default function PhimPlayerPage({
                                   videoRef.current.muted = next === 0
                                 }
                               }}
-                              className="w-16 accent-red-500 cursor-pointer"
+                              className="w-16 cursor-pointer accent-red-500"
                             />
                           </div>
                         </>
                       )}
 
-                      <div className="w-px h-4 bg-white/10 mx-1 hidden sm:block" />
+                      <div className="mx-1 hidden h-4 w-px bg-white/10 sm:block" />
 
                       <button
                         type="button"
@@ -1166,15 +1204,14 @@ export default function PhimPlayerPage({
               </div>
             </section>
 
-            {/* Movie Info Section */}
             <section
               className={`mt-6 overflow-hidden rounded-2xl border border-white/5 bg-[#121214]/50 backdrop-blur-sm transition-all duration-500 ${
                 isLightsOut ? 'mt-0 h-0 border-none opacity-0' : 'opacity-100'
               }`}
             >
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/5 px-5 py-4 sm:px-6">
+              <div className="flex flex-col justify-between gap-4 border-b border-white/5 px-5 py-4 sm:flex-row sm:items-center sm:px-6">
                 <div>
-                  <h2 className="text-xl md:text-2xl font-black text-white">{movie.title}</h2>
+                  <h2 className="text-xl font-black text-white md:text-2xl">{movie.title}</h2>
                   <p className="mt-1 text-sm text-zinc-500">
                     {movie.status || 'Đang cập nhật'} • {movie.release_year || 'N/A'} • {movie.country || 'N/A'}
                   </p>
@@ -1231,12 +1268,12 @@ export default function PhimPlayerPage({
                     <div className="space-y-4">
                       <div className="flex items-center justify-between border-b border-white/5 pb-3">
                         <span className="text-zinc-500">Đánh giá</span>
-                        <span className="font-bold text-yellow-500 flex items-center gap-1">
+                        <span className="flex items-center gap-1 font-bold text-yellow-500">
                           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
                           {movie.rating || 'N/A'}
                         </span>
                       </div>
-                      
+
                       <div className="flex items-center justify-between border-b border-white/5 pb-3">
                         <span className="text-zinc-500">Lượt xem</span>
                         <span className="font-semibold text-zinc-300">{formatViews(movie.views)}</span>
@@ -1249,12 +1286,12 @@ export default function PhimPlayerPage({
 
                       <div className="flex flex-col gap-1 border-b border-white/5 pb-3">
                         <span className="text-zinc-500">Diễn viên</span>
-                        <span className="font-medium text-zinc-300 line-clamp-2">{movie.main_cast || 'Đang cập nhật'}</span>
+                        <span className="line-clamp-2 font-medium text-zinc-300">{movie.main_cast || 'Đang cập nhật'}</span>
                       </div>
 
                       <div className="flex flex-col gap-1">
                         <span className="text-zinc-500">Thể loại</span>
-                        <span className="font-medium text-zinc-300 line-clamp-2">{movie.genres || 'Đang cập nhật'}</span>
+                        <span className="line-clamp-2 font-medium text-zinc-300">{movie.genres || 'Đang cập nhật'}</span>
                       </div>
                     </div>
                   </div>
@@ -1263,11 +1300,10 @@ export default function PhimPlayerPage({
             </section>
           </div>
 
-          {/* Sidebar / Episode List */}
           <aside
             className={`flex flex-col gap-6 transition-all duration-500 ${
               isLightsOut ? 'h-0 overflow-hidden opacity-0' : 'opacity-100'
-            } ${isTheaterMode ? 'w-full' : 'w-full lg:w-[35%] xl:w-[30%] shrink-0'}`}
+            } ${isTheaterMode ? 'w-full' : 'w-full shrink-0 lg:w-[35%] xl:w-[30%]'}`}
           >
             <div
               className={`flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#121214] shadow-xl ${
@@ -1282,7 +1318,7 @@ export default function PhimPlayerPage({
                     <span className="flex h-6 w-1.5 rounded-full bg-red-600" />
                     Danh sách tập
                   </h3>
-                  <span className="rounded-lg bg-white/5 px-2.5 py-1 text-xs font-semibold text-zinc-400 border border-white/5">
+                  <span className="rounded-lg border border-white/5 bg-white/5 px-2.5 py-1 text-xs font-semibold text-zinc-400">
                     {episodes.length} tập
                   </span>
                 </div>
@@ -1307,7 +1343,7 @@ export default function PhimPlayerPage({
                   <p className="text-sm font-medium text-zinc-500">Phim đang cập nhật tập mới</p>
                 </div>
               ) : (
-                <div className="flex-1 overflow-y-auto p-4 sm:p-5 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10 hover:scrollbar-thumb-white/20">
+                <div className="scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10 hover:scrollbar-thumb-white/20 flex-1 overflow-y-auto p-4 sm:p-5">
                   <EpisodeGrid
                     episodes={filteredEpisodes}
                     currentEpisodeId={currentEpisode?.id}
@@ -1319,11 +1355,9 @@ export default function PhimPlayerPage({
               )}
             </div>
           </aside>
-          
         </div>
       </div>
 
-      {/* Mobile Bottom Navigation (Visible only when not in Lights Out mode) */}
       {!isLightsOut && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-zinc-950/90 px-4 py-3 backdrop-blur-lg lg:hidden">
           <div className="mx-auto flex max-w-lg items-center justify-between gap-3">
@@ -1331,7 +1365,7 @@ export default function PhimPlayerPage({
               type="button"
               disabled={!prevEpisode}
               onClick={() => prevEpisode && handleChangeEpisode(prevEpisode)}
-              className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-white/5 text-sm font-semibold text-zinc-300 transition-colors hover:bg-white/10 disabled:opacity-30 disabled:pointer-events-none"
+              className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-white/5 text-sm font-semibold text-zinc-300 transition-colors hover:bg-white/10 disabled:pointer-events-none disabled:opacity-30"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" x2="5" y1="19" y2="5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
               Trước
@@ -1349,7 +1383,7 @@ export default function PhimPlayerPage({
               type="button"
               disabled={!nextEpisode}
               onClick={() => nextEpisode && handleChangeEpisode(nextEpisode)}
-              className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 text-sm font-bold text-white transition-colors hover:bg-red-500 disabled:opacity-30 disabled:pointer-events-none"
+              className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 text-sm font-bold text-white transition-colors hover:bg-red-500 disabled:pointer-events-none disabled:opacity-30"
             >
               Sau
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>

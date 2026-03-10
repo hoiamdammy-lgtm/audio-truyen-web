@@ -2,6 +2,15 @@
 
 import type { ServerForm as ServerFormType } from '@/types/movie-admin'
 
+const PROVIDER_LABELS: Record<string, string> = {
+  direct: 'Direct',
+  okru: 'OK.ru',
+  bilibili: 'Bilibili',
+  google_drive: 'Google Drive',
+  youtube: 'YouTube',
+  seekstreaming: 'SeekStreaming',
+  auto: 'Auto',
+}
 type Props = {
   form: ServerFormType
   editingServerId: string | null
@@ -63,7 +72,16 @@ export default function ServerForm({
               <label className="mb-1 block text-xs font-medium text-zinc-400">Provider</label>
               <select
                 value={form.provider}
-                onChange={(e) => onChange({ ...form, provider: e.target.value })}
+                onChange={(e) => {
+                  const provider = e.target.value
+                  const label = PROVIDER_LABELS[provider] || provider
+
+                  onChange({
+                    ...form,
+                    provider,
+                    name: label, // tự động cập nhật tên server
+                  })
+                }}
                 className="w-full rounded-2xl border border-zinc-800 bg-zinc-950 p-3 outline-none text-zinc-100"
               >
                 <option value="direct">Direct</option>

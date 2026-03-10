@@ -71,7 +71,7 @@ export default function ServerForm({
                 <option value="bilibili">Bilibili</option>
                 <option value="google_drive">Google Drive</option>
                 <option value="youtube">YouTube</option>
-                <option value="telegram">Telegram</option>
+                <option value="seekstreaming">seekstreaming</option>
                 <option value="auto">Tự nhận diện</option>
               </select>
             </div>

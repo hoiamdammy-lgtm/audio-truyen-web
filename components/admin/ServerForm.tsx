@@ -88,7 +88,7 @@ export default function ServerForm({
                 <option value="okru">OK.ru</option>
                 <option value="dailymotion">Dailymotion</option>
                 <option value="Seekstreaming">Seekstreaming</option>
-                <option value="google_drive">Google Drive</option>
+                <option value="streamc">streamc</option>
                 <option value="youtube">YouTube</option>
                 <option value="auto">Tự nhận diện</option>
               </select>

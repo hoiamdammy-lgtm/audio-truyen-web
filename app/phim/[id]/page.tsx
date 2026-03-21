@@ -413,6 +413,78 @@ const TabButton = memo(function TabButton({
   )
 })
 
+const CompactEpisodeStrip = memo(function CompactEpisodeStrip({
+  episodes,
+  currentEpisodeId,
+  onSelect,
+  progressMap,
+}: {
+  episodes: Episode[]
+  currentEpisodeId?: string
+  onSelect: (episode: Episode) => void
+  progressMap: Record<string, number>
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="hide-scrollbar flex gap-2 overflow-x-auto pb-1">
+        {episodes.map((ep) => {
+          const isPlaying = currentEpisodeId === ep.id
+          const progress = progressMap[ep.id] || 0
+
+          return (
+            <button
+              key={ep.id}
+              type="button"
+              onClick={() => onSelect(ep)}
+              className={`relative min-w-[72px] overflow-hidden rounded-2xl border px-3 py-3 text-center transition-all ${
+                isPlaying
+                  ? 'border-red-400 bg-red-600 text-white shadow-[0_10px_30px_-15px_rgba(220,38,38,0.95)]'
+                  : 'border-white/10 bg-white/[0.03] text-zinc-200 hover:border-white/20 hover:bg-white/[0.08]'
+              }`}
+            >
+              <div className={`text-[10px] font-bold uppercase tracking-[0.18em] ${isPlaying ? 'text-red-100' : 'text-zinc-500'}`}>
+                Tập
+              </div>
+              <div className="mt-1 text-lg font-black">{ep.episode_number}</div>
+              <div className="mt-1 min-h-[16px] text-[10px] font-semibold">
+                {isPlaying ? 'Đang xem' : 'Mở'}
+              </div>
+              {progress > 0 && (
+                <div className="absolute bottom-0 left-0 h-1 w-full bg-white/10">
+                  <div
+                    className={`h-full ${isPlaying ? 'bg-white' : 'bg-red-500'}`}
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
+        {episodes.slice(0, 12).map((ep) => {
+          const isPlaying = currentEpisodeId === ep.id
+          return (
+            <button
+              key={`${ep.id}-mini`}
+              type="button"
+              onClick={() => onSelect(ep)}
+              className={`rounded-xl px-2 py-2 text-xs font-bold transition ${
+                isPlaying
+                  ? 'bg-red-600 text-white'
+                  : 'bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              {ep.episode_number}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+})
+
 const EpisodeExplorer = memo(function EpisodeExplorer({
   episodes,
   currentEpisodeId,
@@ -539,7 +611,7 @@ const EpisodeExplorer = memo(function EpisodeExplorer({
             <p className="text-sm font-medium text-zinc-500">Không tìm thấy tập phù hợp</p>
           </div>
         ) : episodeLayout === 'grid' ? (
-          <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 xl:grid-cols-5">
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
             {episodes.map((ep) => {
               const isPlaying = currentEpisodeId === ep.id
               const progress = progressMap[ep.id] || 0
@@ -565,10 +637,16 @@ const EpisodeExplorer = memo(function EpisodeExplorer({
                     </span>
                   </div>
 
-                  <div className="mt-2 min-h-[32px] text-[11px] font-medium leading-4 text-zinc-300">
-                    {ep.title?.trim() && ep.title.trim() !== `Tập ${ep.episode_number}`
-                      ? ep.title.trim()
-                      : 'Đang phát nội dung'}
+                  <div className="mt-3 min-h-[18px]">
+                    {isPlaying ? (
+                      <span className="inline-flex rounded-full bg-white/15 px-2 py-1 text-[10px] font-bold text-white">
+                        Đang xem
+                      </span>
+                    ) : ep.title?.trim() && ep.title.trim() !== `Tập ${ep.episode_number}` ? (
+                      <p className="line-clamp-1 text-[11px] font-medium text-zinc-400">{ep.title.trim()}</p>
+                    ) : (
+                      <p className="text-[11px] font-medium text-zinc-500">Mở tập</p>
+                    )}
                   </div>
 
                   {progress > 0 && (
@@ -613,7 +691,9 @@ const EpisodeExplorer = memo(function EpisodeExplorer({
                         )}
                       </div>
                       <p className="mt-2 truncate text-sm font-semibold text-current">
-                        {ep.title?.trim() || `Tập ${ep.episode_number}`}
+                        {ep.title?.trim() && ep.title.trim() !== `Tập ${ep.episode_number}`
+                          ? ep.title.trim()
+                          : `Tập ${ep.episode_number}`}
                       </p>
                     </div>
                     {isPlaying && (
@@ -1536,8 +1616,8 @@ export default function PhimPlayerPage({
           <div className="absolute inset-x-0 bottom-0 h-[82vh] rounded-t-[28px] border border-white/10 bg-[#0d0d0f] shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/5 px-4 py-4">
               <div>
-                <p className="text-sm font-bold text-white">Bảng điều khiển phim</p>
-                <p className="mt-1 text-xs text-zinc-500">Chọn tập, xem thông tin và chỉnh cài đặt</p>
+                <p className="text-sm font-bold text-white">Chi tiết & cài đặt</p>
+                <p className="mt-1 text-xs text-zinc-500">Danh sách tập đã hiện ngay dưới player, khu này dùng cho thông tin và thiết lập</p>
               </div>
               <button
                 type="button"
@@ -1713,8 +1793,8 @@ export default function PhimPlayerPage({
       </header>
 
       <div className={`mx-auto w-full px-4 py-6 transition-all duration-500 sm:px-6 lg:px-8 ${isTheaterMode ? 'max-w-[2000px]' : 'max-w-[1880px]'}`}>
-        <div className={`flex flex-col gap-6 lg:gap-8 ${isTheaterMode ? '' : 'lg:flex-row'}`}>
-          <div className={`flex flex-col transition-all duration-500 ${isLightsOut ? 'z-50' : 'z-10'} ${isTheaterMode ? 'w-full' : 'w-full shrink-0 lg:w-[68%] xl:w-[70%]'}`}>
+        <div className={`flex flex-col gap-6 xl:gap-8 ${isTheaterMode ? '' : 'xl:flex-row'}`}>
+          <div className={`flex flex-col transition-all duration-500 ${isLightsOut ? 'z-50' : 'z-10'} ${isTheaterMode ? 'w-full' : 'w-full shrink-0 xl:w-[66%] 2xl:w-[70%]'}`}>
             <section className="overflow-hidden rounded-[28px] border border-white/10 bg-[#0d0d0f] shadow-[0_30px_80px_-35px_rgba(0,0,0,0.85)] ring-1 ring-white/5">
               <div
                 ref={playerContainerRef}
@@ -2012,9 +2092,78 @@ export default function PhimPlayerPage({
                       </div>
                     )}
                   </div>
+
+                  <div className="grid gap-3 border-t border-white/5 pt-4 md:grid-cols-2">
+                    <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-4">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-emerald-300/80">Phát liên tục</p>
+                      <div className="mt-2 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-white">
+                            {isAutoNext ? 'Hết tập sẽ tự qua tập kế' : 'Đang tắt tự chuyển tập'}
+                          </p>
+                          <p className="mt-1 text-xs text-emerald-100/70">
+                            {nextEpisode
+                              ? `Tập kế: ${nextEpisode.episode_number}`
+                              : 'Đây là tập cuối hoặc chưa có tập kế tiếp'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={toggleAutoNext}
+                          className={`rounded-xl px-4 py-2 text-xs font-bold transition ${
+                            isAutoNext
+                              ? 'bg-emerald-400 text-black hover:bg-emerald-300'
+                              : 'bg-white/10 text-white hover:bg-white/15'
+                          }`}
+                        >
+                          {isAutoNext ? 'Đang bật' : 'Bật lại'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-500">Xem nhanh</p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-zinc-300">
+                        <span className="rounded-full bg-white/5 px-3 py-1.5">N / P đổi tập</span>
+                        <span className="rounded-full bg-white/5 px-3 py-1.5">I bỏ intro</span>
+                        <span className="rounded-full bg-white/5 px-3 py-1.5">F toàn màn hình</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </section>
+
+            {!isLightsOut && (
+              <section className="mt-4 overflow-hidden rounded-[28px] border border-white/10 bg-[#101012]/85 shadow-[0_20px_50px_-30px_rgba(0,0,0,0.9)] xl:hidden">
+                <div className="border-b border-white/5 px-4 py-4 sm:px-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-base font-black text-white">Danh sách tập</h2>
+                      <p className="mt-1 text-xs text-zinc-500">Trên điện thoại vẫn hiện tập ngay dưới player để chuyển nhanh</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('episodes')
+                        setShowMobilePanel(true)
+                      }}
+                      className="rounded-xl bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 transition hover:bg-white/10"
+                    >
+                      Mở đầy đủ
+                    </button>
+                  </div>
+                </div>
+                <div className="p-4 sm:p-5">
+                  <CompactEpisodeStrip
+                    episodes={filteredEpisodes}
+                    currentEpisodeId={currentEpisode?.id}
+                    onSelect={handleChangeEpisode}
+                    progressMap={episodeProgressMap}
+                  />
+                </div>
+              </section>
+            )}
 
             {!isLightsOut && (
               <section className="mt-6 overflow-hidden rounded-[28px] border border-white/10 bg-[#101012]/85 backdrop-blur-sm shadow-[0_30px_70px_-35px_rgba(0,0,0,0.75)]">
@@ -2029,14 +2178,14 @@ export default function PhimPlayerPage({
                     <button
                       type="button"
                       onClick={() => setShowMobilePanel(true)}
-                      className="flex h-10 items-center justify-center rounded-2xl bg-white/5 px-4 text-sm font-semibold text-zinc-200 transition hover:bg-white/10 lg:hidden"
+                      className="flex h-10 items-center justify-center rounded-2xl bg-white/5 px-4 text-sm font-semibold text-zinc-200 transition hover:bg-white/10 xl:hidden"
                     >
-                      Mở bảng điều khiển
+                      Thông tin & cài đặt
                     </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 xl:grid-cols-4 sm:p-5">
+                <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 2xl:grid-cols-4 sm:p-5">
                   <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
                     <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-zinc-500">Đánh giá</p>
                     <p className="mt-2 text-2xl font-black text-yellow-400">{movie.rating || 'N/A'}</p>
@@ -2063,9 +2212,9 @@ export default function PhimPlayerPage({
           </div>
 
           <aside
-            className={`hidden transition-all duration-500 lg:flex ${
+            className={`hidden transition-all duration-500 xl:flex ${
               isLightsOut ? 'h-0 overflow-hidden opacity-0' : 'opacity-100'
-            } ${isTheaterMode ? 'w-full' : 'w-full shrink-0 lg:w-[32%] xl:w-[30%]'}`}
+            } ${isTheaterMode ? 'w-full' : 'w-full shrink-0 xl:w-[34%] 2xl:w-[30%]'}`}
           >
             <div className={`flex w-full flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#0d0d0f] shadow-xl ${isTheaterMode ? 'max-h-[700px]' : 'max-h-[calc(100vh-7rem)] sticky top-24'}`}>
               <div className="border-b border-white/5 p-4 sm:p-5">
@@ -2152,7 +2301,7 @@ export default function PhimPlayerPage({
               onClick={() => setShowMobilePanel(true)}
               className="flex h-12 items-center justify-center rounded-2xl bg-red-600 text-sm font-bold text-white transition hover:bg-red-500"
             >
-              Tập
+              Menu
             </button>
 
             <button

@@ -15,8 +15,36 @@ const FALLBACK_COVER =
 
 const STORAGE_FAVORITES = 'movie-favorites-v1'
 const STORAGE_PROGRESS = 'movie-progress-v1'
-const STORAGE_DENSITY = 'movie-density-v1'
 const STORAGE_PLAYER_STATE = 'movie-player-state-v2'
+
+const COUNTRY_ALIASES: Record<string, string> = {
+  'trung quoc': 'Trung Quốc',
+  'trug quoc': 'Trung Quốc',
+  china: 'Trung Quốc',
+  cn: 'Trung Quốc',
+  'han quoc': 'Hàn Quốc',
+  'nam han': 'Hàn Quốc',
+  korea: 'Hàn Quốc',
+  'south korea': 'Hàn Quốc',
+  kr: 'Hàn Quốc',
+  'nhat ban': 'Nhật Bản',
+  japan: 'Nhật Bản',
+  jp: 'Nhật Bản',
+  'thai lan': 'Thái Lan',
+  thailand: 'Thái Lan',
+  th: 'Thái Lan',
+  'dai loan': 'Đài Loan',
+  taiwan: 'Đài Loan',
+  tw: 'Đài Loan',
+  'hong kong': 'Hồng Kông',
+  hongkong: 'Hồng Kông',
+  'viet nam': 'Việt Nam',
+  vietnam: 'Việt Nam',
+  vn: 'Việt Nam',
+  'hoa ky': 'Mỹ',
+  usa: 'Mỹ',
+  us: 'Mỹ',
+}
 
 type Movie = {
   id: string
@@ -60,8 +88,7 @@ type ContinueWatchingItem = {
 }
 
 type StatusFilter = 'all' | 'ongoing' | 'completed' | 'favorites'
-type SortBy = 'newest' | 'popular' | 'az'
-type Density = 'comfortable' | 'compact'
+type SortBy = 'newest' | 'popular' | 'az' | 'year-desc' | 'year-asc'
 
 function normalizeText(str: string) {
   return (
@@ -73,6 +100,41 @@ function normalizeText(str: string) {
       .toLowerCase()
       .trim() || ''
   )
+}
+
+function prettifyLabel(value: string) {
+  return value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+}
+
+function normalizeCountryLabel(country?: string | null) {
+  if (!country) return 'Khác'
+
+  const cleaned = normalizeText(country).replace(/\s+/g, ' ')
+  return COUNTRY_ALIASES[cleaned] || prettifyLabel(country)
+}
+
+function extractMovieCountries(country?: string | null) {
+  if (!country) return ['Khác']
+
+  const normalized = country
+    .split(/[,/|;]+| - | – /g)
+    .map((item) => normalizeCountryLabel(item))
+    .filter(Boolean)
+
+  return Array.from(new Set(normalized.length ? normalized : ['Khác']))
+}
+
+function getPrimaryCountry(country?: string | null) {
+  return extractMovieCountries(country)[0] || 'Khác'
+}
+
+function formatMovieCountries(country?: string | null) {
+  return extractMovieCountries(country).join(', ')
 }
 
 function getEpisodeCount(movie: Movie) {
@@ -143,6 +205,38 @@ function normalizePlayerStateData(
   }
 
   return {}
+}
+
+function sortMovies(list: Movie[], sortBy: SortBy) {
+  const result = [...list]
+
+  if (sortBy === 'popular') {
+    result.sort((a, b) => (b.views || 0) - (a.views || 0))
+    return result
+  }
+
+  if (sortBy === 'az') {
+    result.sort((a, b) => a.title.localeCompare(b.title, 'vi'))
+    return result
+  }
+
+  if (sortBy === 'year-desc') {
+    result.sort((a, b) => (b.release_year || 0) - (a.release_year || 0))
+    return result
+  }
+
+  if (sortBy === 'year-asc') {
+    result.sort((a, b) => (a.release_year || 0) - (b.release_year || 0))
+    return result
+  }
+
+  result.sort((a, b) => {
+    const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
+    const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
+    return bTime - aTime
+  })
+
+  return result
 }
 
 function PosterImage({
@@ -222,57 +316,24 @@ function ToolbarChip({
   )
 }
 
-function QuickFilterRow({
-  statusFilter,
-  setStatusFilter,
-  sortBy,
-  setSortBy,
-  counts,
+function FilterSelect({
+  value,
+  onChange,
+  children,
 }: {
-  statusFilter: StatusFilter
-  setStatusFilter: (value: StatusFilter) => void
-  sortBy: SortBy
-  setSortBy: (value: SortBy) => void
-  counts: {
-    all: number
-    ongoing: number
-    completed: number
-    favorites: number
-  }
+  value: string
+  onChange: (value: string) => void
+  children: ReactNode
 }) {
   return (
-    <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-      <ToolbarChip active={statusFilter === 'all'} onClick={() => setStatusFilter('all')}>
-        Tất cả ({counts.all})
-      </ToolbarChip>
-      <ToolbarChip
-        active={statusFilter === 'ongoing'}
-        onClick={() => setStatusFilter('ongoing')}
-      >
-        Đang cập nhật ({counts.ongoing})
-      </ToolbarChip>
-      <ToolbarChip
-        active={statusFilter === 'completed'}
-        onClick={() => setStatusFilter('completed')}
-      >
-        Hoàn thành ({counts.completed})
-      </ToolbarChip>
-      <ToolbarChip
-        active={statusFilter === 'favorites'}
-        onClick={() => setStatusFilter('favorites')}
-      >
-        Yêu thích ({counts.favorites})
-      </ToolbarChip>
-      <ToolbarChip active={sortBy === 'popular'} onClick={() => setSortBy('popular')}>
-        Xem nhiều
-      </ToolbarChip>
-      <ToolbarChip active={sortBy === 'newest'} onClick={() => setSortBy('newest')}>
-        Mới nhất
-      </ToolbarChip>
-      <ToolbarChip active={sortBy === 'az'} onClick={() => setSortBy('az')}>
-        A → Z
-      </ToolbarChip>
-    </div>
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      style={{ colorScheme: 'dark' }}
+      className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 text-sm text-white outline-none transition focus:border-red-500/35 focus:bg-zinc-950"
+    >
+      {children}
+    </select>
   )
 }
 
@@ -282,19 +343,17 @@ function MovieCard({
   onToggleFavorite,
   progress,
   priority = false,
-  density = 'comfortable',
 }: {
   movie: Movie
   isFavorite: boolean
   onToggleFavorite: (movieId: string) => void
   progress?: ContinueWatchingItem
   priority?: boolean
-  density?: Density
 }) {
   const episodeCount = getEpisodeCount(movie)
-  const compact = density === 'compact'
   const hasPercent = typeof progress?.percent === 'number' && (progress.percent || 0) > 0
   const hasEpisodeProgress = typeof progress?.currentEpisode === 'number'
+  const countries = formatMovieCountries(movie.country)
 
   return (
     <div className="group relative">
@@ -387,11 +446,9 @@ function MovieCard({
             )}
           </div>
 
-          <div className={compact ? 'p-3' : 'p-4'}>
+          <div className="p-4">
             <h3
-              className={`font-bold leading-5 text-white transition group-hover:text-red-400 ${
-                compact ? 'min-h-[2.5rem] text-[13px]' : 'min-h-[2.9rem] text-sm sm:text-[15px]'
-              }`}
+              className="min-h-[2.9rem] text-sm font-bold leading-5 text-white transition group-hover:text-red-400 sm:text-[15px]"
               title={movie.title}
             >
               {movie.title}
@@ -404,30 +461,31 @@ function MovieCard({
               <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
                 🎞 {episodeCount} tập
               </span>
-              {movie.country && (
+              {movie.release_year && (
                 <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
-                  🌎 {movie.country}
+                  📅 {movie.release_year}
+                </span>
+              )}
+              {countries && (
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
+                  🌎 {countries}
                 </span>
               )}
             </div>
 
-            {!compact && (
-              <div className="hidden sm:block">
-                <p className="mt-3 line-clamp-2 min-h-[2.5rem] text-xs leading-5 text-zinc-400">
-                  {movie.description ||
-                    'Khám phá bộ phim đang được cập nhật với giao diện xem hiện đại và tối ưu cho mọi thiết bị.'}
-                </p>
+            <p className="mt-3 line-clamp-2 min-h-[2.5rem] text-xs leading-5 text-zinc-400">
+              {movie.description ||
+                'Khám phá bộ phim đang được cập nhật với giao diện rõ ràng, lọc nhanh theo quốc gia và năm.'}
+            </p>
 
-                <div className="mt-4 flex items-center gap-2">
-                  <div className="inline-flex h-10 flex-1 items-center justify-center rounded-xl bg-white px-3 text-xs font-bold text-black transition group-hover:bg-zinc-200">
-                    {hasPercent || hasEpisodeProgress ? 'Tiếp tục xem' : 'Xem ngay'}
-                  </div>
-                  <div className="inline-flex h-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] px-3 text-xs font-semibold text-zinc-200">
-                    Chi tiết
-                  </div>
-                </div>
+            <div className="mt-4 flex items-center gap-2">
+              <div className="inline-flex h-10 flex-1 items-center justify-center rounded-xl bg-white px-3 text-xs font-bold text-black transition group-hover:bg-zinc-200">
+                {hasPercent || hasEpisodeProgress ? 'Tiếp tục xem' : 'Xem ngay'}
               </div>
-            )}
+              <div className="inline-flex h-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] px-3 text-xs font-semibold text-zinc-200">
+                Chi tiết
+              </div>
+            </div>
           </div>
         </article>
       </Link>
@@ -441,7 +499,8 @@ export default function PhimPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [sortBy, setSortBy] = useState<SortBy>('newest')
-  const [density, setDensity] = useState<Density>('comfortable')
+  const [countryFilter, setCountryFilter] = useState('all')
+  const [yearFilter, setYearFilter] = useState('all')
   const [favoriteIds, setFavoriteIds] = useState<string[]>([])
   const [progressMap, setProgressMap] = useState<Record<string, ProgressItem>>({})
   const [playerStateMap, setPlayerStateMap] = useState<Record<string, PlayerStateItem>>({})
@@ -449,7 +508,6 @@ export default function PhimPage() {
 
   useEffect(() => {
     setFavoriteIds(safeRead<string[]>(STORAGE_FAVORITES, []))
-    setDensity(safeRead<Density>(STORAGE_DENSITY, 'comfortable'))
 
     const rawProgress = safeRead<Record<string, ProgressItem> | ProgressItem[]>(
       STORAGE_PROGRESS,
@@ -527,8 +585,7 @@ export default function PhimPage() {
       } else {
         merged[item.movieId] = {
           ...merged[item.movieId],
-          currentEpisode:
-            merged[item.movieId].currentEpisode || item.episodeNumber,
+          currentEpisode: merged[item.movieId].currentEpisode || item.episodeNumber,
           updatedAt: merged[item.movieId].updatedAt || item.updatedAt,
         }
       }
@@ -536,6 +593,41 @@ export default function PhimPage() {
 
     return merged
   }, [progressMap, playerStateMap])
+
+  const countryOptions = useMemo(() => {
+    const unique = new Set<string>()
+
+    movies.forEach((movie) => {
+      extractMovieCountries(movie.country).forEach((country) => unique.add(country))
+    })
+
+    return Array.from(unique).sort((a, b) => {
+      if (a === 'Khác') return 1
+      if (b === 'Khác') return -1
+      return a.localeCompare(b, 'vi')
+    })
+  }, [movies])
+
+  const yearOptions = useMemo(() => {
+    return Array.from(
+      new Set(movies.map((movie) => movie.release_year).filter(Boolean) as number[])
+    ).sort((a, b) => b - a)
+  }, [movies])
+
+  const countryCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+
+    movies.forEach((movie) => {
+      extractMovieCountries(movie.country).forEach((country) => {
+        counts.set(country, (counts.get(country) || 0) + 1)
+      })
+    })
+
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'vi'))
+      .slice(0, 8)
+      .map(([country, count]) => ({ country, count }))
+  }, [movies])
 
   const filteredMovies = useMemo(() => {
     let result = [...movies]
@@ -545,11 +637,18 @@ export default function PhimPage() {
       result = result.filter((movie) => {
         const title = normalizeText(movie.title)
         const description = normalizeText(movie.description || '')
-        const country = normalizeText(movie.country || '')
+        const rawCountry = normalizeText(movie.country || '')
+        const canonicalCountries = extractMovieCountries(movie.country)
+          .map((item) => normalizeText(item))
+          .join(' ')
+        const year = movie.release_year ? String(movie.release_year) : ''
+
         return (
           title.includes(keyword) ||
           description.includes(keyword) ||
-          country.includes(keyword)
+          rawCountry.includes(keyword) ||
+          canonicalCountries.includes(keyword) ||
+          year.includes(keyword)
         )
       })
     }
@@ -562,20 +661,18 @@ export default function PhimPage() {
       result = result.filter((movie) => favoriteIds.includes(movie.id))
     }
 
-    if (sortBy === 'popular') {
-      result.sort((a, b) => (b.views || 0) - (a.views || 0))
-    } else if (sortBy === 'az') {
-      result.sort((a, b) => a.title.localeCompare(b.title, 'vi'))
-    } else {
-      result.sort((a, b) => {
-        const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
-        const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
-        return bTime - aTime
-      })
+    if (countryFilter !== 'all') {
+      result = result.filter((movie) =>
+        extractMovieCountries(movie.country).includes(countryFilter)
+      )
     }
 
-    return result
-  }, [movies, searchTerm, statusFilter, sortBy, favoriteIds])
+    if (yearFilter !== 'all') {
+      result = result.filter((movie) => String(movie.release_year || '') === yearFilter)
+    }
+
+    return sortMovies(result, sortBy)
+  }, [movies, searchTerm, statusFilter, favoriteIds, countryFilter, yearFilter, sortBy])
 
   const featuredMovie = useMemo(() => {
     if (!filteredMovies.length) return undefined
@@ -636,8 +733,6 @@ export default function PhimPage() {
     return [...movies].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 10)
   }, [movies])
 
-  const latestMovies = useMemo(() => filteredMovies.slice(0, 24), [filteredMovies])
-
   const filterCounts = useMemo(() => {
     const completed = movies.filter((m) => m.status === 'Hoàn thành').length
     const ongoing = movies.length - completed
@@ -650,112 +745,164 @@ export default function PhimPage() {
     }
   }, [movies, favoriteIds])
 
+  const filteredGroups = useMemo(() => {
+    const grouped = new Map<string, Movie[]>()
+
+    filteredMovies.forEach((movie) => {
+      const key = getPrimaryCountry(movie.country)
+      const current = grouped.get(key) || []
+      current.push(movie)
+      grouped.set(key, current)
+    })
+
+    return Array.from(grouped.entries())
+      .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], 'vi'))
+      .map(([country, items]) => ({ country, items }))
+  }, [filteredMovies])
+
+  const activeFilterLabel = useMemo(() => {
+    const labels: string[] = []
+
+    if (countryFilter !== 'all') labels.push(countryFilter)
+    if (yearFilter !== 'all') labels.push(yearFilter)
+    if (statusFilter === 'ongoing') labels.push('Đang cập nhật')
+    if (statusFilter === 'completed') labels.push('Hoàn thành')
+    if (statusFilter === 'favorites') labels.push('Yêu thích')
+
+    return labels.join(' • ')
+  }, [countryFilter, yearFilter, statusFilter])
+
   return (
     <main className="min-h-screen bg-[#09090b] text-white">
       <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top,rgba(220,38,38,0.14),transparent_28%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.04),transparent_18%),linear-gradient(to_bottom,#09090b,#09090b)]" />
 
       <header className="border-b border-white/5 bg-[#09090b]/95 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-3 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between gap-3">
-            <Link href="/" className="flex min-w-0 items-center gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-red-500 to-rose-700 text-lg shadow-[0_0_20px_rgba(239,68,68,0.35)]">
-                🎬
-              </div>
-              <div className="min-w-0">
-                <p className="truncate text-lg font-black tracking-tight text-white">
-                  PHIM ĐAM MỸ
-                </p>
-                <p className="hidden text-[11px] uppercase tracking-[0.22em] text-zinc-500 sm:block">
-                  Xem phim nhanh, đẹp, tiện
-                </p>
-              </div>
-            </Link>
+        <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
+          <div className="overflow-hidden rounded-[28px] border border-white/8 bg-white/[0.04] p-5 sm:p-6 lg:p-7">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+              <div className="max-w-2xl">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-red-500 to-rose-700 text-lg shadow-[0_0_20px_rgba(239,68,68,0.35)]">
+                    🎬
+                  </div>
+                  <div>
+                    <p className="text-xl font-black tracking-tight text-white sm:text-2xl">
+                      PHIM ĐAM MỸ
+                    </p>
+                    <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">
+                      Dễ xem hơn • Lọc nhanh hơn • Gọn hơn
+                    </p>
+                  </div>
+                </div>
 
-            <div className="hidden items-center gap-2 md:flex">
-              <button
-                type="button"
-                onClick={() => {
-                  setDensity('comfortable')
-                  safeWrite(STORAGE_DENSITY, 'comfortable')
-                }}
-                className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                  density === 'comfortable'
-                    ? 'border-red-500/30 bg-red-500/15 text-red-300'
-                    : 'border-white/10 bg-white/[0.04] text-zinc-300'
-                }`}
-              >
-                Thẻ lớn
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setDensity('compact')
-                  safeWrite(STORAGE_DENSITY, 'compact')
-                }}
-                className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                  density === 'compact'
-                    ? 'border-red-500/30 bg-red-500/15 text-red-300'
-                    : 'border-white/10 bg-white/[0.04] text-zinc-300'
-                }`}
-              >
-                Thẻ gọn
-              </button>
+                <p className="mt-4 max-w-xl text-sm leading-6 text-zinc-400 sm:text-[15px] sm:leading-7">
+                  Tập trung vào điều người xem cần nhất: tìm phim nhanh theo tên, quốc gia, năm phát hành và trạng thái, không còn các khối thống kê gây rối mắt.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2 text-xs sm:text-sm">
+                <div className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-2 text-zinc-300">
+                  {movies.length} phim
+                </div>
+                <div className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-2 text-zinc-300">
+                  {countryOptions.length} quốc gia
+                </div>
+                <div className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-2 text-zinc-300">
+                  {yearOptions.length} năm
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="relative sm:col-span-2 lg:col-span-2">
+                <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500">
+                  🔍
+                </span>
+                <input
+                  type="text"
+                  placeholder="Tìm tên phim, quốc gia, năm..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.05] pl-11 pr-12 text-sm text-white outline-none transition placeholder:text-zinc-500 focus:border-red-500/35 focus:bg-white/[0.08]"
+                />
+                {searchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchTerm('')}
+                    className="absolute right-3 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-sm text-zinc-400 transition hover:bg-white/10 hover:text-white"
+                    aria-label="Xóa tìm kiếm"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              <FilterSelect value={countryFilter} onChange={setCountryFilter}>
+                <option value="all">Tất cả quốc gia</option>
+                {countryOptions.map((country) => (
+                  <option key={country} value={country}>
+                    {country}
+                  </option>
+                ))}
+              </FilterSelect>
+
+              <FilterSelect value={yearFilter} onChange={setYearFilter}>
+                <option value="all">Tất cả năm</option>
+                {yearOptions.map((year) => (
+                  <option key={year} value={String(year)}>
+                    {year}
+                  </option>
+                ))}
+              </FilterSelect>
+            </div>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <FilterSelect value={statusFilter} onChange={(value) => setStatusFilter(value as StatusFilter)}>
+                <option value="all">Tất cả trạng thái</option>
+                <option value="ongoing">Đang cập nhật</option>
+                <option value="completed">Hoàn thành</option>
+                <option value="favorites">Yêu thích</option>
+              </FilterSelect>
+
+              <FilterSelect value={sortBy} onChange={(value) => setSortBy(value as SortBy)}>
+                <option value="newest">Mới cập nhật</option>
+                <option value="popular">Xem nhiều</option>
+                <option value="az">A → Z</option>
+                <option value="year-desc">Năm mới → cũ</option>
+                <option value="year-asc">Năm cũ → mới</option>
+              </FilterSelect>
             </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_180px]">
-            <div className="relative">
-              <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500">
-                🔍
-              </span>
-              <input
-                type="text"
-                placeholder="Tìm tên phim, mô tả, từ khóa..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.05] pl-11 pr-12 text-sm text-white outline-none transition placeholder:text-zinc-500 focus:border-red-500/35 focus:bg-white/[0.08]"
-              />
-              {searchTerm && (
-                <button
-                  type="button"
-                  onClick={() => setSearchTerm('')}
-                  className="absolute right-3 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-sm text-zinc-400 transition hover:bg-white/10 hover:text-white"
-                  aria-label="Xóa tìm kiếm"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-              className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 text-sm text-zinc-200 outline-none"
-            >
-              <option value="all">Tất cả</option>
-              <option value="ongoing">Đang cập nhật</option>
-              <option value="completed">Hoàn thành</option>
-              <option value="favorites">Yêu thích</option>
-            </select>
-
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as SortBy)}
-              className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 text-sm text-zinc-200 outline-none"
-            >
-              <option value="newest">Mới cập nhật</option>
-              <option value="popular">Xem nhiều</option>
-              <option value="az">A → Z</option>
-            </select>
+          <div className="mt-4 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+            <ToolbarChip active={countryFilter === 'all'} onClick={() => setCountryFilter('all')}>
+              Toàn bộ quốc gia
+            </ToolbarChip>
+            {countryCounts.map((item) => (
+              <ToolbarChip
+                key={item.country}
+                active={countryFilter === item.country}
+                onClick={() => setCountryFilter(item.country)}
+              >
+                {item.country} ({item.count})
+              </ToolbarChip>
+            ))}
           </div>
 
-          <QuickFilterRow
-            statusFilter={statusFilter}
-            setStatusFilter={setStatusFilter}
-            sortBy={sortBy}
-            setSortBy={setSortBy}
-            counts={filterCounts}
-          />
+          <div className="mt-4 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+            <ToolbarChip active={statusFilter === 'all'} onClick={() => setStatusFilter('all')}>
+              Tất cả ({filterCounts.all})
+            </ToolbarChip>
+            <ToolbarChip active={statusFilter === 'ongoing'} onClick={() => setStatusFilter('ongoing')}>
+              Đang cập nhật ({filterCounts.ongoing})
+            </ToolbarChip>
+            <ToolbarChip active={statusFilter === 'completed'} onClick={() => setStatusFilter('completed')}>
+              Hoàn thành ({filterCounts.completed})
+            </ToolbarChip>
+            <ToolbarChip active={statusFilter === 'favorites'} onClick={() => setStatusFilter('favorites')}>
+              Yêu thích ({filterCounts.favorites})
+            </ToolbarChip>
+          </div>
         </div>
       </header>
 
@@ -774,11 +921,11 @@ export default function PhimPage() {
                 <div className="absolute inset-0 bg-gradient-to-t from-[#09090b] via-transparent to-transparent" />
               </div>
 
-              <div className="relative grid min-h-[300px] items-end px-4 py-5 sm:min-h-[380px] sm:px-6 sm:py-8 lg:min-h-[500px] lg:grid-cols-[1.08fr_0.92fr] lg:px-10 lg:py-10">
+              <div className="relative grid min-h-[300px] items-end px-4 py-5 sm:min-h-[380px] sm:px-6 sm:py-8 lg:min-h-[460px] lg:grid-cols-[1.08fr_0.92fr] lg:px-10 lg:py-10">
                 <div className="max-w-2xl">
                   <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-red-500/20 bg-red-500/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.22em] text-red-300">
                     <span className="h-2 w-2 rounded-full bg-red-500" />
-                    Nổi bật cho bạn
+                    Nổi bật theo bộ lọc hiện tại
                   </div>
 
                   <h1 className="mb-3 text-2xl font-black leading-tight tracking-tight text-white sm:text-4xl lg:text-5xl">
@@ -787,7 +934,7 @@ export default function PhimPage() {
 
                   <p className="mb-5 max-w-xl text-sm leading-6 text-zinc-300 sm:text-base sm:leading-7">
                     {featuredMovie.description ||
-                      'Bộ phim nổi bật với giao diện xem hiện đại, tải mượt, thao tác dễ trên điện thoại, tablet và desktop.'}
+                      'Bộ phim nổi bật trong nhóm kết quả hiện tại, ưu tiên hiển thị rõ quốc gia và năm để duyệt nhanh hơn.'}
                   </p>
 
                   <div className="mb-6 flex flex-wrap gap-2 text-xs sm:text-sm">
@@ -797,11 +944,14 @@ export default function PhimPage() {
                     <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-zinc-200">
                       🎞 {getEpisodeCount(featuredMovie)} tập
                     </span>
-                    {featuredMovie.country && (
+                    {featuredMovie.release_year && (
                       <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-zinc-200">
-                        🌎 {featuredMovie.country}
+                        📅 {featuredMovie.release_year}
                       </span>
                     )}
+                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-zinc-200">
+                      🌎 {formatMovieCountries(featuredMovie.country)}
+                    </span>
                     <span
                       className={`rounded-full px-3 py-1.5 font-semibold ${
                         featuredMovie.status === 'Hoàn thành'
@@ -835,13 +985,6 @@ export default function PhimPage() {
                         ? '♥ Đã yêu thích'
                         : '♡ Yêu thích'}
                     </button>
-
-                    <a
-                      href="#thu-vien-phim"
-                      className="inline-flex h-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.05] px-5 text-sm font-bold text-white transition hover:bg-white/[0.08]"
-                    >
-                      Khám phá thư viện
-                    </a>
                   </div>
                 </div>
               </div>
@@ -866,7 +1009,6 @@ export default function PhimPage() {
                     onToggleFavorite={toggleFavorite}
                     progress={item.progress}
                     priority={index < 2}
-                    density="compact"
                   />
                 </div>
               ))}
@@ -901,7 +1043,6 @@ export default function PhimPage() {
                     onToggleFavorite={toggleFavorite}
                     progress={continueWatchingMap[movie.id]}
                     priority={index < 2}
-                    density="compact"
                   />
                 </div>
               ))}
@@ -928,7 +1069,6 @@ export default function PhimPage() {
                       onToggleFavorite={toggleFavorite}
                       progress={continueWatchingMap[movie.id]}
                       priority={index < 2}
-                      density="compact"
                     />
                   </div>
                 </div>
@@ -940,44 +1080,18 @@ export default function PhimPage() {
         <section id="thu-vien-phim">
           <SectionTitle
             eyebrow="Thư viện"
-            title="Phim mới cập nhật"
+            title={countryFilter === 'all' ? 'Phân loại theo quốc gia' : 'Kết quả theo bộ lọc'}
             extra={
-              <div className="hidden items-center gap-2 sm:flex">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDensity('comfortable')
-                    safeWrite(STORAGE_DENSITY, 'comfortable')
-                  }}
-                  className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                    density === 'comfortable'
-                      ? 'border-red-500/30 bg-red-500/15 text-red-300'
-                      : 'border-white/10 bg-white/[0.04] text-zinc-300'
-                  }`}
-                >
-                  Thẻ lớn
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDensity('compact')
-                    safeWrite(STORAGE_DENSITY, 'compact')
-                  }}
-                  className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                    density === 'compact'
-                      ? 'border-red-500/30 bg-red-500/15 text-red-300'
-                      : 'border-white/10 bg-white/[0.04] text-zinc-300'
-                  }`}
-                >
-                  Thẻ gọn
-                </button>
+              <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-zinc-300">
+                {filteredMovies.length} phim
               </div>
             }
           />
 
-          {searchTerm && (
-            <div className="mb-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300">
-              Kết quả cho: “{searchTerm}”
+          {(searchTerm || activeFilterLabel) && (
+            <div className="mb-4 flex flex-wrap gap-2 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300">
+              {searchTerm && <span>Kết quả cho: “{searchTerm}”</span>}
+              {activeFilterLabel && <span>• {activeFilterLabel}</span>}
             </div>
           )}
 
@@ -994,13 +1108,7 @@ export default function PhimPage() {
               </button>
             </div>
           ) : isLoading ? (
-            <div
-              className={`grid gap-4 ${
-                density === 'compact'
-                  ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'
-                  : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5'
-              }`}
-            >
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
               {Array.from({ length: 12 }).map((_, i) => (
                 <div
                   key={i}
@@ -1015,12 +1123,12 @@ export default function PhimPage() {
                 </div>
               ))}
             </div>
-          ) : latestMovies.length === 0 ? (
+          ) : filteredMovies.length === 0 ? (
             <div className="rounded-3xl border border-white/5 bg-white/[0.03] px-6 py-14 text-center">
               <div className="mb-4 text-4xl">📭</div>
               <h3 className="text-xl font-black text-white">Không tìm thấy phim phù hợp</h3>
               <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-zinc-400">
-                Hãy thử từ khóa khác, đổi bộ lọc hoặc quay lại chế độ tất cả để khám phá thêm nội dung.
+                Hãy thử từ khóa khác, đổi quốc gia, đổi năm hoặc quay lại chế độ tất cả.
               </p>
               <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
                 <ToolbarChip
@@ -1029,21 +1137,17 @@ export default function PhimPage() {
                     setSearchTerm('')
                     setStatusFilter('all')
                     setSortBy('newest')
+                    setCountryFilter('all')
+                    setYearFilter('all')
                   }}
                 >
                   Đặt lại bộ lọc
                 </ToolbarChip>
               </div>
             </div>
-          ) : (
-            <div
-              className={`grid gap-4 ${
-                density === 'compact'
-                  ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'
-                  : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5'
-              }`}
-            >
-              {latestMovies.map((movie, index) => (
+          ) : countryFilter !== 'all' ? (
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+              {filteredMovies.map((movie, index) => (
                 <MovieCard
                   key={movie.id}
                   movie={movie}
@@ -1051,8 +1155,40 @@ export default function PhimPage() {
                   onToggleFavorite={toggleFavorite}
                   progress={continueWatchingMap[movie.id]}
                   priority={index < 4}
-                  density={density}
                 />
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-10">
+              {filteredGroups.map((group) => (
+                <section key={group.country}>
+                  <SectionTitle
+                    eyebrow="Quốc gia"
+                    title={group.country}
+                    extra={
+                      <button
+                        type="button"
+                        onClick={() => setCountryFilter(group.country)}
+                        className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-zinc-300 transition hover:bg-white/[0.08]"
+                      >
+                        Lọc riêng {group.country}
+                      </button>
+                    }
+                  />
+
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+                    {group.items.map((movie, index) => (
+                      <MovieCard
+                        key={movie.id}
+                        movie={movie}
+                        isFavorite={favoriteIds.includes(movie.id)}
+                        onToggleFavorite={toggleFavorite}
+                        progress={continueWatchingMap[movie.id]}
+                        priority={index < 2}
+                      />
+                    ))}
+                  </div>
+                </section>
               ))}
             </div>
           )}
